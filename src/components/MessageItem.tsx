@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Smile, Check, CheckCheck, Languages, Download, Play, FileText, Film, Volume2, Sparkles } from 'lucide-react';
+import { Smile, Check, CheckCheck, Languages, Download, Play, FileText, Film, Volume2, Sparkles, Pencil, X } from 'lucide-react';
 import { Message, UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { toggleMessageReaction } from '../services/chatService';
+import { toggleMessageReaction, editMessage } from '../services/chatService';
 import { translateText } from '../utils/translator';
 import { getMediaBlobUrl } from '../utils/mediaStore';
+import { GifPickerModal } from './GifPickerModal';
+import { TenorGif } from '../services/tenorService';
 
 interface MessageItemProps {
   message: Message;
@@ -13,6 +15,7 @@ interface MessageItemProps {
   showSenderInfo: boolean;
   onPreviewMedia: (media: { url: string; type: string; name?: string; format?: string; size?: number }) => void;
   onSelectUserChat?: (user: UserProfile) => void;
+  onOpenUserProfile?: (userId: string, userName?: string) => void;
 }
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '😡', '🇨🇳', '🔥'];
@@ -23,16 +26,26 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   isSelf,
   showSenderInfo,
   onPreviewMedia,
-  onSelectUserChat
+  onSelectUserChat,
+  onOpenUserProfile
 }) => {
   const { profile } = useAuth();
   const [showReactionBar, setShowReactionBar] = useState(false);
+  const [showGifReactionPicker, setShowGifReactionPicker] = useState(false);
+  const [localReactions, setLocalReactions] = useState<Record<string, string>>(message.reactions || {});
   const [showTranslation, setShowTranslation] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editText, setEditText] = useState(message.text || '');
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [resolvedBlobUrl, setResolvedBlobUrl] = useState<string | null>(null);
   const [translationResult, setTranslationResult] = useState<{
     translated: string;
     pinyin?: string;
   } | null>(null);
+
+  useEffect(() => {
+    setLocalReactions(message.reactions || {});
+  }, [message.reactions]);
 
   useEffect(() => {
     let active = true;
@@ -58,15 +71,24 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
-  const handleReactionClick = async (emoji: string) => {
+  const handleReactionClick = async (reactionValue: string) => {
     if (!profile) return;
+    const current = { ...localReactions };
+    if (current[profile.uid] === reactionValue) {
+      delete current[profile.uid];
+    } else {
+      current[profile.uid] = reactionValue;
+    }
+    setLocalReactions(current);
     setShowReactionBar(false);
+    setShowGifReactionPicker(false);
+
     await toggleMessageReaction(
       conversationId,
       message.id,
-      message.reactions,
+      localReactions,
       profile.uid,
-      emoji
+      reactionValue
     );
   };
 
@@ -82,17 +104,30 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     }
   };
 
-  // Group reactions by emoji and count
+  // Group reactions by emoji or GIF URL and count
   const reactionCounts: Record<string, { count: number; users: string[] }> = {};
-  if (message.reactions) {
-    Object.entries(message.reactions).forEach(([uid, emoji]) => {
-      if (!reactionCounts[emoji]) {
-        reactionCounts[emoji] = { count: 0, users: [] };
+  if (localReactions) {
+    Object.entries(localReactions).forEach(([uid, val]) => {
+      if (!reactionCounts[val]) {
+        reactionCounts[val] = { count: 0, users: [] };
       }
-      reactionCounts[emoji].count += 1;
-      reactionCounts[emoji].users.push(uid);
+      reactionCounts[val].count += 1;
+      reactionCounts[val].users.push(uid);
     });
   }
+
+  const handleSaveEdit = async () => {
+    if (!editText.trim() || isSavingEdit) return;
+    setIsSavingEdit(true);
+    try {
+      await editMessage(conversationId, message.id, editText.trim());
+      setIsEditing(false);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
 
   const isVideo = message.mediaType === 'video' || ['mp4', 'webm', 'mov'].includes((message.fileFormat || '').toLowerCase());
   const isLegacyVideo = ['avi', 'flv', 'swf', 'wmv'].includes((message.fileFormat || '').toLowerCase());
@@ -109,9 +144,13 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       {/* Sender name for group channels */}
       {showSenderInfo && !isSelf && (
         <div className="flex items-center gap-1.5 mb-1 ml-9">
-          <span className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400">
+          <button
+            type="button"
+            onClick={() => onOpenUserProfile?.(message.senderId, message.senderName)}
+            className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400 hover:text-emerald-500 hover:underline cursor-pointer"
+          >
             {message.senderName}
-          </span>
+          </button>
           <span className="text-[10px] text-zinc-400">
             {new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
           </span>
@@ -121,7 +160,11 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       <div className="flex items-end gap-2 max-w-[85%] sm:max-w-[70%]">
         {/* Recipient Avatar */}
         {!isSelf && (
-          <div className="w-7 h-7 rounded-full overflow-hidden shrink-0 mb-1 ring-1 ring-zinc-200 dark:ring-zinc-700">
+          <div
+            onClick={() => onOpenUserProfile?.(message.senderId, message.senderName)}
+            className="w-7 h-7 rounded-full overflow-hidden shrink-0 mb-1 ring-1 ring-zinc-200 dark:ring-zinc-700 cursor-pointer hover:ring-2 hover:ring-emerald-400 transition-all"
+            title={`View ${message.senderName}'s Profile & Banner`}
+          >
             <img
               src={message.senderPhoto || `https://api.dicebear.com/7.x/bottts/svg?seed=${message.senderId}`}
               alt={message.senderName}
@@ -139,7 +182,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               }`}
             >
               {QUICK_REACTIONS.map((emoji) => {
-                const isSelected = profile && message.reactions?.[profile.uid] === emoji;
+                const isSelected = profile && localReactions[profile.uid] === emoji;
                 return (
                   <button
                     key={emoji}
@@ -153,6 +196,19 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                   </button>
                 );
               })}
+
+              {/* Tenor GIF Reaction Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  setShowReactionBar(false);
+                  setShowGifReactionPicker(true);
+                }}
+                className="px-2 py-0.5 rounded-full bg-teal-50 dark:bg-teal-950/60 hover:bg-teal-100 text-teal-600 dark:text-teal-400 font-mono text-[10px] font-black transition-colors"
+                title="React with Tenor GIF"
+              >
+                GIF
+              </button>
             </div>
           )}
 
@@ -252,26 +308,70 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             {/* 5. TEXT CONTENT */}
             {message.text && (
               <div className="px-4 py-2.5">
-                <p className="text-sm leading-relaxed whitespace-pre-wrap break-words select-text">
-                  {message.text}
-                </p>
-
-                {/* Translation & Pinyin display */}
-                {showTranslation && translationResult && (
-                  <div
-                    className={`mt-2 pt-2 border-t text-xs space-y-1 ${
-                      isSelf ? 'border-white/20 text-emerald-100' : 'border-zinc-300 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300'
-                    }`}
-                  >
-                    {translationResult.pinyin && (
-                      <p className="font-mono text-[11px] opacity-90">
-                        <span className="font-semibold text-emerald-400">Pinyin:</span> {translationResult.pinyin}
-                      </p>
-                    )}
-                    <p className="font-medium italic">
-                      <span className="font-semibold text-emerald-400">Translation:</span> {translationResult.translated}
-                    </p>
+                {isEditing ? (
+                  <div className="space-y-2 py-1 min-w-[200px] sm:min-w-[260px]">
+                    <textarea
+                      value={editText}
+                      onChange={(e) => setEditText(e.target.value)}
+                      className="w-full p-2 text-xs rounded-xl bg-black/30 text-white border border-white/40 focus:outline-none focus:ring-1 focus:ring-emerald-400 resize-none"
+                      rows={2}
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          handleSaveEdit();
+                        } else if (e.key === 'Escape') {
+                          setIsEditing(false);
+                        }
+                      }}
+                    />
+                    <div className="flex items-center justify-end gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setIsEditing(false)}
+                        className="px-2.5 py-1 text-[11px] rounded-lg bg-white/20 hover:bg-white/30 text-white font-medium"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSaveEdit}
+                        disabled={isSavingEdit || !editText.trim()}
+                        className="px-3 py-1 text-[11px] rounded-lg bg-emerald-400 hover:bg-emerald-300 text-zinc-950 font-bold disabled:opacity-50"
+                      >
+                        {isSavingEdit ? 'Saving...' : 'Save'}
+                      </button>
+                    </div>
                   </div>
+                ) : (
+                  <>
+                    <p className="text-sm leading-relaxed whitespace-pre-wrap break-words select-text">
+                      {message.text}
+                      {message.isEdited && (
+                        <span className="text-[10px] opacity-75 ml-1.5 font-medium italic">
+                          (edited)
+                        </span>
+                      )}
+                    </p>
+
+                    {/* Translation & Pinyin display */}
+                    {showTranslation && translationResult && (
+                      <div
+                        className={`mt-2 pt-2 border-t text-xs space-y-1 ${
+                          isSelf ? 'border-white/20 text-emerald-100' : 'border-zinc-300 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300'
+                        }`}
+                      >
+                        {translationResult.pinyin && (
+                          <p className="font-mono text-[11px] opacity-90">
+                            <span className="font-semibold text-emerald-400">Pinyin:</span> {translationResult.pinyin}
+                          </p>
+                        )}
+                        <p className="font-medium italic">
+                          <span className="font-semibold text-emerald-400">Translation:</span> {translationResult.translated}
+                        </p>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             )}
@@ -284,21 +384,33 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 isSelf ? 'justify-end' : 'justify-start'
               }`}
             >
-              {Object.entries(reactionCounts).map(([emoji, data]) => {
+              {Object.entries(reactionCounts).map(([reactionKey, data]) => {
                 const hasMyReaction = profile && data.users.includes(profile.uid);
+                const isGifReaction = reactionKey.startsWith('http') || reactionKey.startsWith('data:');
+
                 return (
                   <button
-                    key={emoji}
+                    key={reactionKey}
                     type="button"
-                    onClick={() => handleReactionClick(emoji)}
-                    className={`px-2 py-0.5 rounded-full text-xs flex items-center gap-1 shadow-xs border transition-all ${
+                    onClick={() => handleReactionClick(reactionKey)}
+                    className={`px-2 py-0.5 rounded-full text-xs flex items-center gap-1 shadow-xs border transition-all active:scale-95 ${
                       hasMyReaction
-                        ? 'bg-emerald-100 dark:bg-emerald-950/80 border-emerald-500 text-emerald-700 dark:text-emerald-300 font-semibold'
-                        : 'bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300'
+                        ? 'bg-emerald-100 dark:bg-emerald-950/80 border-emerald-500 text-emerald-700 dark:text-emerald-300 font-semibold ring-1 ring-emerald-500/30'
+                        : 'bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:border-emerald-400'
                     }`}
+                    title={hasMyReaction ? 'Click to remove reaction' : 'Click to add reaction'}
                   >
-                    <span>{emoji}</span>
-                    <span className="text-[10px] font-medium">{data.count}</span>
+                    {isGifReaction ? (
+                      <img
+                        src={reactionKey}
+                        alt="GIF reaction"
+                        className="w-5 h-5 rounded-md object-cover inline-block"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <span>{reactionKey}</span>
+                    )}
+                    <span className="text-[10px] font-bold">{data.count}</span>
                   </button>
                 );
               })}
@@ -306,7 +418,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           )}
         </div>
 
-        {/* Hover Action Buttons: React, Translate */}
+        {/* Hover Action Buttons: React, Edit, Translate */}
         <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 mb-1">
           <button
             type="button"
@@ -316,6 +428,20 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           >
             <Smile size={15} />
           </button>
+
+          {isSelf && message.text && (
+            <button
+              type="button"
+              onClick={() => {
+                setIsEditing(true);
+                setEditText(message.text || '');
+              }}
+              className="p-1.5 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-emerald-500 transition-colors"
+              title="Edit sentence (fix typo or mistake)"
+            >
+              <Pencil size={14} />
+            </button>
+          )}
 
           {message.text && (
             <button
@@ -346,6 +472,14 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           )}
         </div>
       )}
+
+      {/* Tenor GIF Reaction Modal */}
+      <GifPickerModal
+        isOpen={showGifReactionPicker}
+        onClose={() => setShowGifReactionPicker(false)}
+        onSelectGif={(gif) => handleReactionClick(gif.previewUrl || gif.url)}
+        title="React with Tenor GIF"
+      />
     </div>
   );
 };

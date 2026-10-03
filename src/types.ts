@@ -60,6 +60,8 @@ export interface Message {
   reactions?: Record<string, string>; // uid -> emoji (e.g. '❤️', '👍')
   readBy?: string[]; // array of userIds
   createdAt: string;
+  isEdited?: boolean;
+  editedAt?: string;
   translatedText?: string;
   pinyinText?: string;
 }

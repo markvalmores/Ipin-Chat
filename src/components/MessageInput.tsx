@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Image as ImageIcon,
   Video,
@@ -16,6 +16,8 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { translateText } from '../utils/translator';
 import { compressImageForUpload, captureVideoPoster, storeMediaBlob } from '../utils/mediaStore';
+import { GifPickerModal } from './GifPickerModal';
+import { TenorGif } from '../services/tenorService';
 
 interface MessageInputProps {
   onSendMessage: (data: {
@@ -27,19 +29,26 @@ interface MessageInputProps {
     fileFormat?: string;
   }) => Promise<void>;
   placeholder?: string;
+  externalText?: string | null;
+  onClearExternalText?: () => void;
+  onOpenTranslator?: () => void;
 }
 
 const EMOJI_LIST = ['👍', '❤️', '😂', '😮', '😢', '😡', '🇨🇳', '🗽', '🍵', '🔥', '🎉', '👏', '🙏', '💯', '✨', '🍜', '🚀', '💻'];
 
 export const MessageInput: React.FC<MessageInputProps> = ({
   onSendMessage,
-  placeholder = 'Type a message in English or Chinese...'
+  placeholder = 'Type a message in English or Chinese...',
+  externalText,
+  onClearExternalText,
+  onOpenTranslator
 }) => {
   const { profile } = useAuth();
   const [text, setText] = useState('');
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [autoTranslate, setAutoTranslate] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [showGifPicker, setShowGifPicker] = useState(false);
   const [selectedFile, setSelectedFile] = useState<{
     file: File;
     previewUrl: string;
@@ -48,6 +57,24 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     size: number;
     name: string;
   } | null>(null);
+
+  const handleSelectTenorGif = async (gif: TenorGif) => {
+    setShowGifPicker(false);
+    await onSendMessage({
+      text: '',
+      mediaUrl: gif.url,
+      mediaType: 'image',
+      fileName: `${gif.title}.gif`,
+      fileFormat: 'gif'
+    });
+  };
+
+  useEffect(() => {
+    if (externalText) {
+      setText((prev) => (prev ? `${prev} ${externalText}` : externalText));
+      onClearExternalText?.();
+    }
+  }, [externalText]);
 
   // Voice recording state
   const [isRecording, setIsRecording] = useState(false);
@@ -365,14 +392,15 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           <ImageIcon size={20} />
         </button>
 
-        {/* Video specific launcher */}
+        {/* Tenor GIF Search & Send */}
         <button
           type="button"
-          onClick={() => fileInputRef.current?.click()}
-          className="p-2 rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors hidden sm:flex"
-          title="Send Video of any size (MP4, AVI, FLV, SWF)"
+          onClick={() => setShowGifPicker(true)}
+          className="px-2.5 py-1 rounded-xl bg-teal-50 dark:bg-teal-950/40 hover:bg-teal-100 dark:hover:bg-teal-900/60 text-teal-700 dark:text-teal-300 font-mono font-bold text-xs border border-teal-500/20 transition-all flex items-center gap-1 shadow-xs"
+          title="Search & Send Tenor GIFs"
         >
-          <Video size={20} />
+          <Sparkles size={12} className="text-teal-500" />
+          <span>GIF</span>
         </button>
 
         {/* Voice Note Button */}
@@ -421,6 +449,19 @@ export const MessageInput: React.FC<MessageInputProps> = ({
             <span className="hidden sm:inline text-[10px]">Pinyin</span>
           </button>
 
+          {/* Full Chinese ⇄ English Translator Studio */}
+          {onOpenTranslator && (
+            <button
+              type="button"
+              onClick={onOpenTranslator}
+              className="p-1 rounded-md text-xs font-semibold flex items-center gap-0.5 text-zinc-400 hover:text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors mr-1"
+              title="Open Chinese ⇄ English Translator"
+            >
+              <Sparkles size={13} className="text-emerald-500" />
+              <span className="hidden sm:inline text-[10px] font-bold">CN⇄EN</span>
+            </button>
+          )}
+
           {/* Emoji button inside input */}
           <button
             type="button"
@@ -449,6 +490,14 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           )}
         </button>
       </div>
+
+      {/* Tenor GIF Search & Send Modal */}
+      <GifPickerModal
+        isOpen={showGifPicker}
+        onClose={() => setShowGifPicker(false)}
+        onSelectGif={handleSelectTenorGif}
+        title="Send Tenor GIF to Chat"
+      />
     </div>
   );
 };

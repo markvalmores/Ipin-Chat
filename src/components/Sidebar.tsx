@@ -16,6 +16,7 @@ import { useAuth } from '../context/AuthContext';
 import { StoryBar } from './StoryBar';
 import { DEMO_USERS } from '../services/sampleData';
 import { subscribeToAllUsers } from '../services/chatService';
+import { getConversationDisplay } from '../utils/conversationHelper';
 
 interface SidebarProps {
   conversations: Conversation[];
@@ -327,6 +328,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
           filteredConversations.map((conv) => {
             const isActive = conv.id === activeConversationId;
             const isGroup = conv.type === 'group';
+            const displayInfo = getConversationDisplay(conv, profile?.uid, registeredUsers);
+            const isOtherOnline = displayInfo.otherUser
+              ? activePresences.some((p) => p.uid === displayInfo.otherUser!.uid && p.isOnline)
+              : true;
 
             return (
               <div
@@ -347,13 +352,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <div className="relative shrink-0">
                   <div className="w-12 h-12 rounded-2xl overflow-hidden ring-1 ring-zinc-200 dark:ring-zinc-800 shadow-xs">
                     <img
-                      src={conv.avatar || 'https://images.unsplash.com/photo-1508804185872-d7badad00f7d?w=150'}
-                      alt={conv.title}
+                      src={displayInfo.avatar}
+                      alt={displayInfo.title}
                       className="w-full h-full object-cover"
                     />
                   </div>
                   {/* Status dot */}
-                  <span className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-zinc-950" />
+                  <span
+                    className={`absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full ring-2 ring-white dark:ring-zinc-950 ${
+                      isOtherOnline ? 'bg-emerald-500' : 'bg-zinc-400'
+                    }`}
+                  />
                 </div>
 
                 {/* Conversation Info */}
@@ -366,7 +375,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           : 'text-zinc-900 dark:text-zinc-100'
                       }`}
                     >
-                      {conv.title}
+                      {displayInfo.title}
                     </h3>
                     {conv.lastMessageTime && (
                       <span className="text-[10px] text-zinc-400 shrink-0 ml-1">

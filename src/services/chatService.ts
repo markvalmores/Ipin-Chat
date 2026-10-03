@@ -60,16 +60,21 @@ export async function sendMessage(
 
     const defaultChannel = INITIAL_PUBLIC_CHANNELS.find(c => c.id === conversationId);
 
-    await setDoc(convRef, {
+    const updateData: Record<string, any> = {
       id: conversationId,
-      type: defaultChannel?.type || (conversationId.includes('_dm_') || conversationId.startsWith('dm_') ? 'direct' : 'group'),
-      title: defaultChannel?.title || 'Chat',
-      avatar: defaultChannel?.avatar || '',
       lastMessageText: lastPreview,
       lastMessageSender: sender.displayName,
       lastMessageTime: new Date().toISOString(),
       updatedAt: new Date().toISOString()
-    }, { merge: true });
+    };
+
+    if (defaultChannel) {
+      updateData.type = defaultChannel.type;
+      updateData.title = defaultChannel.title;
+      updateData.avatar = defaultChannel.avatar;
+    }
+
+    await setDoc(convRef, updateData, { merge: true });
 
     // 2. Save message to subcollection
     const msgRef = doc(db, 'conversations', conversationId, 'messages', messageId);
@@ -123,6 +128,24 @@ export async function sendMessage(
   } catch (error) {
     console.error("Error saving message to Firestore:", error);
     return messageId;
+  }
+}
+
+// Edit message text (fixes broken sentence)
+export async function editMessage(
+  conversationId: string,
+  messageId: string,
+  newText: string
+): Promise<void> {
+  try {
+    const msgRef = doc(db, 'conversations', conversationId, 'messages', messageId);
+    await updateDoc(msgRef, {
+      text: newText.trim(),
+      isEdited: true,
+      editedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    console.warn("Could not edit message in Firestore:", error);
   }
 }
 

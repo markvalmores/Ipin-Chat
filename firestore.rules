@@ -50,7 +50,12 @@ service cloud.firestore {
       match /messages/{messageId} {
         allow read: if isSignedIn();
         allow create: if isSignedIn()
-          && request.resource.data.senderId == request.auth.uid;
+          && (
+            request.resource.data.senderId == request.auth.uid ||
+            request.resource.data.senderId == 'ipin_ai_xiaoai' ||
+            request.resource.data.senderId == 'system-bot' ||
+            request.resource.data.senderId.matches('^ipin_ai.*')
+          );
         allow update: if isSignedIn();
         allow delete: if isSignedIn() && resource.data.senderId == request.auth.uid;
       }

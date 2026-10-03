@@ -14,7 +14,8 @@ import {
   Check,
   Film,
   Play,
-  Tv
+  Tv,
+  ChevronLeft
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { DEMO_USERS } from '../services/sampleData';
@@ -174,7 +175,18 @@ export const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
             </div>
           )}
 
-          {/* Top action buttons */}
+          {/* Top Back to Chat Button */}
+          <button
+            type="button"
+            onClick={onClose}
+            className="absolute top-4 left-4 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-black/70 hover:bg-black/90 text-white backdrop-blur-md text-xs font-bold shadow-lg transition-all active:scale-95"
+            title="Back to Chat"
+          >
+            <ChevronLeft size={16} />
+            <span>Back to Chat</span>
+          </button>
+
+          {/* Top right action buttons */}
           <div className="absolute top-4 right-4 flex items-center gap-2 z-20">
             {isEditing && (
               <button
@@ -189,6 +201,7 @@ export const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
             <button
               onClick={onClose}
               className="p-2 rounded-full bg-black/60 hover:bg-black/80 text-white backdrop-blur-md transition-colors"
+              title="Close Profile"
             >
               <X size={18} />
             </button>
@@ -591,6 +604,15 @@ export const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
                 Sign Out
               </button>
             )}
+            {/* Back to Chat Button */}
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-full py-3 rounded-2xl bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors shadow-xs"
+            >
+              <ChevronLeft size={16} />
+              <span>Back to Chat</span>
+            </button>
           </div>
         </div>
 
