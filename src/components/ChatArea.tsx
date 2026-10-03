@@ -16,7 +16,8 @@ import {
   Check,
   X,
   CheckSquare,
-  UserPlus
+  UserPlus,
+  LogOut
 } from 'lucide-react';
 import { Conversation, Message, UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -44,12 +45,14 @@ interface ChatAreaProps {
   conversation: Conversation | null;
   onBackToSidebar?: () => void;
   onSelectUserChat?: (user: UserProfile) => void;
+  onLeaveGroup?: (conversationId: string) => void;
 }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
   conversation,
   onBackToSidebar,
-  onSelectUserChat
+  onSelectUserChat,
+  onLeaveGroup
 }) => {
   const { profile, activePresences } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -61,6 +64,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [isTranslatorModalOpen, setIsTranslatorModalOpen] = useState(false);
   const [isMembersDrawerOpen, setIsMembersDrawerOpen] = useState(false);
   const [isAddMembersModalOpen, setIsAddMembersModalOpen] = useState(false);
+  const [isLeaveGroupModalOpen, setIsLeaveGroupModalOpen] = useState(false);
+  const [isLeavingGroup, setIsLeavingGroup] = useState(false);
   const [activeCall, setActiveCall] = useState<{
     isOpen: boolean;
     type: CallType;
@@ -237,6 +242,20 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   };
 
+  const handleConfirmLeaveGroup = async () => {
+    if (!conversation || !profile || isLeavingGroup) return;
+    setIsLeavingGroup(true);
+    try {
+      await removeMemberFromGroupChat(conversation.id, profile.uid, profile.displayName, profile);
+      setIsLeaveGroupModalOpen(false);
+      onLeaveGroup?.(conversation.id);
+    } catch (err) {
+      console.error('Failed to leave group:', err);
+    } finally {
+      setIsLeavingGroup(false);
+    }
+  };
+
   return (
     <div className="flex-1 h-full flex flex-col bg-white dark:bg-zinc-950 overflow-hidden">
       {/* 1. Active Chat Header */}
@@ -358,6 +377,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             >
               <UserPlus size={15} />
               <span className="hidden sm:inline text-[11px]">Add</span>
+            </button>
+          )}
+
+          {/* Leave Group Button */}
+          {conversation.type === 'group' && (
+            <button
+              type="button"
+              onClick={() => setIsLeaveGroupModalOpen(true)}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-red-50/70 dark:bg-red-950/30 hover:bg-red-100 dark:hover:bg-red-900/50 text-red-600 dark:text-red-400 font-semibold text-xs border border-red-500/20 transition-all shadow-xs"
+              title="Leave this group chat"
+            >
+              <LogOut size={14} />
+              <span className="hidden sm:inline text-[11px]">Leave</span>
             </button>
           )}
 
@@ -709,6 +741,49 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           conversation={conversation}
           registeredUsers={allUsers}
         />
+      )}
+
+      {/* 10. Leave Group Confirmation Modal */}
+      {isLeaveGroupModalOpen && conversation && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-150"
+          onClick={() => setIsLeaveGroupModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-sm bg-white dark:bg-zinc-900 rounded-3xl p-5 border border-zinc-200 dark:border-zinc-800 text-zinc-900 dark:text-white shadow-2xl animate-in zoom-in-95 duration-150 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-red-500/20 text-red-500 flex items-center justify-center shrink-0">
+                <LogOut size={20} />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold">Leave Group Chat?</h4>
+                <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5 leading-relaxed">
+                  Are you sure you want to leave <span className="font-semibold text-zinc-800 dark:text-zinc-200">"{conversation.title}"</span>? You will no longer receive new messages from this group.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setIsLeaveGroupModalOpen(false)}
+                className="px-3.5 py-1.5 rounded-xl text-xs bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 font-semibold transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmLeaveGroup}
+                disabled={isLeavingGroup}
+                className="px-4 py-1.5 rounded-xl text-xs bg-red-600 hover:bg-red-700 disabled:opacity-50 font-bold text-white shadow-md transition-colors"
+              >
+                {isLeavingGroup ? 'Leaving...' : 'Leave Group'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

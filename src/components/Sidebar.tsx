@@ -10,7 +10,8 @@ import {
   ChevronDown,
   Circle,
   UserPlus,
-  Hash
+  Hash,
+  Link
 } from 'lucide-react';
 import { Conversation, Story, UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -32,6 +33,7 @@ interface SidebarProps {
   onStartDirectChat: (user: UserProfile) => void;
   onOpenSearchAccountsModal: () => void;
   onOpenCreateGroupModal: () => void;
+  onOpenJoinGroupModal?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -46,7 +48,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenAuthModal,
   onStartDirectChat,
   onOpenSearchAccountsModal,
-  onOpenCreateGroupModal
+  onOpenCreateGroupModal,
+  onOpenJoinGroupModal
 }) => {
   const { profile, user, activeCount, activePresences } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
@@ -127,6 +130,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <Hash size={19} strokeWidth={2.5} />
           </button>
+
+          {/* Join Group with Invite Link Button */}
+          {onOpenJoinGroupModal && (
+            <button
+              type="button"
+              onClick={onOpenJoinGroupModal}
+              className="p-2 rounded-full hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 transition-colors"
+              title="Join group chat with invite link"
+            >
+              <Link size={18} />
+            </button>
+          )}
 
           {/* Find Friends / Search Account Name Button */}
           <button

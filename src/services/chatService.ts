@@ -666,6 +666,67 @@ export async function removeMemberFromGroupChat(
   );
 }
 
+// Lookup a group chat by ID, full URL, or invite code
+export async function getGroupChatByIdOrInvite(idOrInvite: string): Promise<Conversation | null> {
+  if (!idOrInvite) return null;
+  let cleanId = idOrInvite.trim();
+
+  // If a full URL is passed, extract query parameter or path segment
+  try {
+    if (cleanId.includes('?invite=') || cleanId.includes('&invite=')) {
+      const match = cleanId.match(/[?&]invite=([^&#]+)/);
+      if (match) cleanId = match[1];
+    } else if (cleanId.includes('?join=') || cleanId.includes('&join=')) {
+      const match = cleanId.match(/[?&]join=([^&#]+)/);
+      if (match) cleanId = match[1];
+    } else if (cleanId.includes('/gc/')) {
+      const parts = cleanId.split('/gc/');
+      if (parts[1]) cleanId = parts[1].split(/[?&#]/)[0];
+    }
+  } catch (e) {
+    // Keep cleanId as is
+  }
+
+  // 1. Check Initial public channels
+  const inPublic = INITIAL_PUBLIC_CHANNELS.find(
+    (c) =>
+      c.id === cleanId ||
+      c.inviteCode === cleanId ||
+      (c.inviteCode && c.inviteCode.endsWith(cleanId))
+  );
+  if (inPublic) return inPublic;
+
+  // 2. Check local custom group chats
+  const localList = getLocalGroupChats();
+  const inLocal = localList.find(
+    (c) =>
+      c.id === cleanId ||
+      c.inviteCode === cleanId ||
+      (c.inviteCode && c.inviteCode.endsWith(cleanId))
+  );
+  if (inLocal) return inLocal;
+
+  // 3. Fetch from Firestore by document ID
+  try {
+    const docRef = doc(db, 'conversations', cleanId);
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      return snap.data() as Conversation;
+    }
+
+    // 4. Query Firestore by inviteCode
+    const q = query(collection(db, 'conversations'), where('inviteCode', '==', cleanId));
+    const qSnap = await getDocs(q);
+    if (!qSnap.empty) {
+      return qSnap.docs[0].data() as Conversation;
+    }
+  } catch (err) {
+    console.warn('Error fetching group chat by invite:', err);
+  }
+
+  return null;
+}
+
 // Helper for local persistent 24-hour stories
 const LOCAL_STORIES_STORAGE_KEY = 'ipin_active_stories_v3';
 

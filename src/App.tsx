@@ -26,6 +26,7 @@ import { AuthScreen } from './components/AuthScreen';
 import { SearchAccountsModal } from './components/SearchAccountsModal';
 import { TitleScreen } from './components/TitleScreen';
 import { CreateGroupChatModal } from './components/CreateGroupChatModal';
+import { JoinGroupInviteModal } from './components/JoinGroupInviteModal';
 
 const MessengerInner: React.FC = () => {
   const { profile, isAuthReady } = useAuth();
@@ -41,6 +42,8 @@ const MessengerInner: React.FC = () => {
   const [storyViewerIndex, setStoryViewerIndex] = useState(0);
   const [isCreateStoryOpen, setIsCreateStoryOpen] = useState(false);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
+  const [isJoinGroupModalOpen, setIsJoinGroupModalOpen] = useState(false);
+  const [pendingInviteParam, setPendingInviteParam] = useState<string>('');
   const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
   const [isProfileDrawerOpen, setIsProfileDrawerOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
@@ -48,6 +51,20 @@ const MessengerInner: React.FC = () => {
 
   // Mobile layout toggle
   const [isMobileChatOpen, setIsMobileChatOpen] = useState(false);
+
+  // Check URL for ?invite= or ?join= parameter on page load
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const invite = params.get('invite') || params.get('join');
+      if (invite) {
+        setPendingInviteParam(invite);
+        setIsJoinGroupModalOpen(true);
+      }
+    } catch (e) {
+      // Ignore
+    }
+  }, []);
 
   // Real-time conversations listener
   useEffect(() => {
@@ -149,6 +166,10 @@ const MessengerInner: React.FC = () => {
             onStartDirectChat={handleStartDirectChat}
             onOpenSearchAccountsModal={() => setIsSearchAccountsOpen(true)}
             onOpenCreateGroupModal={() => setIsCreateGroupOpen(true)}
+            onOpenJoinGroupModal={() => {
+              setPendingInviteParam('');
+              setIsJoinGroupModalOpen(true);
+            }}
           />
         </div>
 
@@ -162,6 +183,17 @@ const MessengerInner: React.FC = () => {
             conversation={activeConversation}
             onBackToSidebar={() => setIsMobileChatOpen(false)}
             onSelectUserChat={handleStartDirectChat}
+            onLeaveGroup={(leftConvId) => {
+              const remaining = conversations.filter((c) => c.id !== leftConvId);
+              const fallback =
+                remaining.find((c) => c.id === 'global-china-lounge') ||
+                remaining[0] ||
+                null;
+              if (fallback) {
+                setActiveConversationId(fallback.id);
+              }
+              setIsMobileChatOpen(false);
+            }}
           />
         </div>
       </div>
@@ -174,6 +206,23 @@ const MessengerInner: React.FC = () => {
         onGroupCreated={(newGroup) => {
           setConversations((prev) => [newGroup, ...prev.filter((c) => c.id !== newGroup.id)]);
           setActiveConversationId(newGroup.id);
+          setIsMobileChatOpen(true);
+        }}
+      />
+
+      <JoinGroupInviteModal
+        isOpen={isJoinGroupModalOpen}
+        onClose={() => {
+          setIsJoinGroupModalOpen(false);
+          setPendingInviteParam('');
+        }}
+        initialInvite={pendingInviteParam}
+        onJoinSuccess={(joinedGroup) => {
+          setConversations((prev) => [
+            joinedGroup,
+            ...prev.filter((c) => c.id !== joinedGroup.id)
+          ]);
+          setActiveConversationId(joinedGroup.id);
           setIsMobileChatOpen(true);
         }}
       />

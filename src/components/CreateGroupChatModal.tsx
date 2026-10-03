@@ -148,10 +148,10 @@ export const CreateGroupChatModal: React.FC<CreateGroupChatModalProps> = ({
     }
   };
 
-  const inviteLinkPreview = `ipin.chat/gc/${(title || 'channel').toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
+  const inviteLinkPreview = `${window.location.origin}${window.location.pathname}?invite=${(title || 'channel').toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
 
   const handleCopyLink = () => {
-    navigator.clipboard.writeText(`https://${inviteLinkPreview}`);
+    navigator.clipboard.writeText(inviteLinkPreview);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
   };

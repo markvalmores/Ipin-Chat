@@ -12,7 +12,8 @@ import {
   MessageSquare,
   Globe,
   Sparkles,
-  ExternalLink
+  ExternalLink,
+  LogOut
 } from 'lucide-react';
 import { Conversation, UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -78,7 +79,7 @@ export const ChannelMembersDrawer: React.FC<ChannelMembersDrawerProps> = ({
   const onlineMembers = members.filter((m) => !m.isCreator && m.isOnline);
   const offlineMembers = members.filter((m) => !m.isCreator && !m.isOnline);
 
-  const inviteLink = `https://${conversation.inviteCode || `ipin.chat/gc/${conversation.id}`}`;
+  const inviteLink = `${window.location.origin}${window.location.pathname}?invite=${conversation.id}`;
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(inviteLink);
@@ -437,6 +438,18 @@ export const ChannelMembersDrawer: React.FC<ChannelMembersDrawerProps> = ({
               ))}
             </div>
           </div>
+        )}
+
+        {/* Leave Group Chat Button */}
+        {profile && (
+          <button
+            type="button"
+            onClick={() => setMemberToRemove({ ...profile, isSelfLeave: true })}
+            className="w-full mt-2.5 py-2 px-3 rounded-xl bg-red-50 dark:bg-red-950/40 hover:bg-red-100 dark:hover:bg-red-900/60 text-red-600 dark:text-red-400 font-semibold text-xs border border-red-500/20 flex items-center justify-center gap-1.5 transition-colors shadow-xs"
+          >
+            <LogOut size={13} />
+            <span>Leave Group Chat</span>
+          </button>
         )}
       </div>
 
