@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { extractYouTubeId, getYouTubeBannerEmbedUrl } from '../utils/youtube';
+import { getMediaBlobUrl } from '../utils/mediaStore';
 
 interface BannerMediaProps {
   bannerURL?: string;
@@ -12,6 +13,25 @@ export const BannerMedia: React.FC<BannerMediaProps> = ({
   bannerType,
   className = 'w-full h-full'
 }) => {
+  const [resolvedBlobUrl, setResolvedBlobUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    if (bannerURL?.startsWith('local_mp4:')) {
+      const key = bannerURL.replace('local_mp4:', '');
+      getMediaBlobUrl(key).then((url) => {
+        if (active && url) {
+          setResolvedBlobUrl(url);
+        }
+      });
+    } else {
+      setResolvedBlobUrl(null);
+    }
+    return () => {
+      active = false;
+    };
+  }, [bannerURL]);
+
   if (!bannerURL) {
     return (
       <div className={`${className} bg-gradient-to-r from-emerald-800 via-teal-700 to-emerald-900`} />
@@ -38,18 +58,22 @@ export const BannerMedia: React.FC<BannerMediaProps> = ({
     );
   }
 
-  // 2. Direct MP4 Video Banner
-  const isMp4 =
+  // 2. Direct MP4 Video Banner (Device MP4 upload, blob URL, or MP4 URL)
+  const effectiveVideoUrl = resolvedBlobUrl || (bannerURL.startsWith('blob:') ? bannerURL : null) || (
     bannerType === 'video' ||
     bannerURL.endsWith('.mp4') ||
     bannerURL.includes('.mp4?') ||
-    bannerURL.startsWith('data:video/');
+    bannerURL.startsWith('data:video/')
+      ? bannerURL
+      : null
+  );
 
-  if (isMp4) {
+  if (effectiveVideoUrl) {
     return (
       <div className={`relative ${className} overflow-hidden bg-black`}>
         <video
-          src={bannerURL}
+          key={effectiveVideoUrl}
+          src={effectiveVideoUrl}
           autoPlay
           loop
           muted

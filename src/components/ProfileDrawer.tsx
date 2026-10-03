@@ -20,6 +20,7 @@ import { useAuth } from '../context/AuthContext';
 import { DEMO_USERS } from '../services/sampleData';
 import { BannerMedia } from './BannerMedia';
 import { isYouTubeUrl, extractYouTubeId } from '../utils/youtube';
+import { storeMediaBlob, compressImageForUpload } from '../utils/mediaStore';
 
 interface ProfileDrawerProps {
   isOpen: boolean;
@@ -73,45 +74,61 @@ export const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
     reader.readAsDataURL(file);
   };
 
-  // Handle banner upload (PNG, JPG, GIF, MP4!)
-  const handleBannerFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Handle banner upload (PNG, JPG, GIF, MP4 from user device!)
+  const handleBannerFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const ext = file.name.split('.').pop()?.toLowerCase();
+    const ext = file.name.split('.').pop()?.toLowerCase() || '';
     const isVideoFile = ext === 'mp4' || file.type.startsWith('video/');
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const dataUrl = event.target?.result as string;
-      setBannerURL(dataUrl);
-      setBannerType(isVideoFile ? 'video' : 'image');
-    };
-    reader.readAsDataURL(file);
+    if (isVideoFile) {
+      // Real MP4 video file uploaded from user device!
+      const objectUrl = URL.createObjectURL(file);
+      await storeMediaBlob(`user_banner_video_${profile.uid}`, file);
+      setBannerURL(objectUrl);
+      setBannerType('video');
+      setFeedback('Device MP4 video loaded! Click "Save Profile" to apply your motion banner.');
+      setTimeout(() => setFeedback(null), 4000);
+    } else {
+      // Image banner
+      const compressedDataUrl = await compressImageForUpload(file);
+      setBannerURL(compressedDataUrl);
+      setBannerType('image');
+      setFeedback('Image banner loaded! Click "Save Profile" to apply.');
+      setTimeout(() => setFeedback(null), 3000);
+    }
   };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSaving(true);
     try {
-      const finalBannerType = isYouTubeUrl(bannerURL)
+      let finalBannerURL = bannerURL.trim();
+      const finalBannerType = isYouTubeUrl(finalBannerURL)
         ? 'youtube'
         : bannerType;
+
+      // If user uploaded a local device MP4 file, reference it safely
+      if (finalBannerType === 'video' && finalBannerURL.startsWith('blob:')) {
+        finalBannerURL = `local_mp4:user_banner_video_${profile.uid}`;
+      }
 
       await updateProfileData({
         displayName: displayName.trim() || profile.displayName,
         location: location.trim(),
         bio: bio.trim(),
-        bannerURL: bannerURL.trim(),
+        bannerURL: finalBannerURL,
         bannerType: finalBannerType,
         photoURL: photoURL.trim(),
         status
       });
       setIsEditing(false);
-      setFeedback('Profile & YouTube Video Banner updated successfully!');
-      setTimeout(() => setFeedback(null), 3000);
-    } catch (err) {
+      setFeedback('Profile & MP4 Motion Banner updated successfully!');
+      setTimeout(() => setFeedback(null), 3500);
+    } catch (err: any) {
       console.error(err);
+      setFeedback(`Error: ${err.message || err}`);
     } finally {
       setIsSaving(false);
     }
@@ -411,6 +428,26 @@ export const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
                     </div>
                   </div>
                 )}
+
+                {/* Direct Upload Buttons */}
+                <div className="mt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => bannerInputRef.current?.click()}
+                    className="flex-1 py-2 px-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-950/70 border border-emerald-500/40 text-xs font-semibold text-emerald-700 dark:text-emerald-300 flex items-center justify-center gap-1.5 transition-colors shadow-xs"
+                  >
+                    <Film size={14} className="text-emerald-500" />
+                    <span>Upload MP4 Video from Device</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => bannerInputRef.current?.click()}
+                    className="py-2 px-3 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 border border-zinc-200 dark:border-zinc-700 text-xs font-semibold text-zinc-700 dark:text-zinc-300 flex items-center justify-center gap-1.5 transition-colors shadow-xs"
+                  >
+                    <Camera size={14} />
+                    <span>Upload Image</span>
+                  </button>
+                </div>
               </div>
 
               <div>

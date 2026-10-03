@@ -2,6 +2,19 @@ import { Conversation, Story, UserProfile } from '../types';
 
 export const INITIAL_PUBLIC_CHANNELS: Conversation[] = [
   {
+    id: 'dm_xiaoai_ai',
+    type: 'direct',
+    title: 'Xiao Ai (小艾) 🤖✨',
+    description: 'Chat with Xiao Ai — functions like an everyday relatable human! Talk about anything in English or Chinese.',
+    avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80',
+    participantIds: ['all-users', 'ipin_ai_xiaoai'],
+    lastMessageText: 'Hey! So nice to meet you ✨ Send me text, photos, or videos anytime!',
+    lastMessageSender: 'Xiao Ai (小艾)',
+    lastMessageTime: new Date(Date.now() - 1000 * 60 * 2).toISOString(),
+    updatedAt: new Date().toISOString(),
+    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 7).toISOString(),
+  },
+  {
     id: 'global-china-lounge',
     type: 'group',
     title: '🌏 Global-China Lounge',
@@ -56,6 +69,22 @@ export const INITIAL_PUBLIC_CHANNELS: Conversation[] = [
 ];
 
 export const DEMO_USERS: UserProfile[] = [
+  {
+    uid: 'ipin_ai_xiaoai',
+    displayName: 'Xiao Ai (小艾) 🤖✨',
+    email: 'xiaoai@ipin.chat',
+    photoURL: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80',
+    bannerURL: 'https://www.youtube.com/watch?v=jfKfPfyJRdk',
+    bannerType: 'youtube',
+    status: 'online',
+    note: 'Chilling with bubble tea 🧋✨ Let’s chat!',
+    noteEmoji: '🧋',
+    noteUpdatedAt: new Date().toISOString(),
+    location: 'Chengdu, China 🇨🇳 ⇄ Global',
+    bio: 'Just your average 24-year-old foodie & tech fan living in China. Talk to me about music, travel, life, or whatever! 😊',
+    createdAt: new Date().toISOString(),
+    lastSeen: 'Active now'
+  },
   {
     uid: 'demo_user_meiling',
     displayName: 'Mei Ling (美玲)',
@@ -163,6 +192,20 @@ export const INITIAL_STORIES: Story[] = [
 ];
 
 export const INITIAL_CHANNEL_MESSAGES: Record<string, any[]> = {
+  'dm_xiaoai_ai': [
+    {
+      id: 'xiaoai-init-1',
+      conversationId: 'dm_xiaoai_ai',
+      senderId: 'ipin_ai_xiaoai',
+      senderName: 'Xiao Ai (小艾) 🤖✨',
+      senderPhoto: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80',
+      text: 'Hey! 👋 Welcome to ipin Messenger! I\'m Xiao Ai. Feel free to text me, send me pictures or videos, or just chat about life or China. What are you up to today? 😊',
+      mediaType: 'none',
+      reactions: { 'ipin_ai_xiaoai': '❤️' },
+      createdAt: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
+      readBy: ['ipin_ai_xiaoai']
+    }
+  ],
   'global-china-lounge': [
     {
       id: 'msg-gcl-1',

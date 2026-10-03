@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Smile, Check, CheckCheck, Languages, Download, Play, FileText, Film, Volume2, Sparkles } from 'lucide-react';
 import { Message, UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { toggleMessageReaction } from '../services/chatService';
 import { translateText } from '../utils/translator';
+import { getMediaBlobUrl } from '../utils/mediaStore';
 
 interface MessageItemProps {
   message: Message;
@@ -27,10 +28,28 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   const { profile } = useAuth();
   const [showReactionBar, setShowReactionBar] = useState(false);
   const [showTranslation, setShowTranslation] = useState(false);
+  const [resolvedBlobUrl, setResolvedBlobUrl] = useState<string | null>(null);
   const [translationResult, setTranslationResult] = useState<{
     translated: string;
     pinyin?: string;
   } | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    if (message.mediaUrl?.startsWith('vid_') || message.mediaUrl?.startsWith('local_media:')) {
+      const key = message.mediaUrl.replace('local_media:', '');
+      getMediaBlobUrl(key).then((url) => {
+        if (active && url) {
+          setResolvedBlobUrl(url);
+        }
+      });
+    } else {
+      setResolvedBlobUrl(null);
+    }
+    return () => {
+      active = false;
+    };
+  }, [message.mediaUrl]);
 
   const formatFileSize = (bytes?: number) => {
     if (!bytes) return '';
@@ -175,7 +194,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             {isVideo && !isLegacyVideo && message.mediaUrl && (
               <div className="rounded-2xl overflow-hidden max-w-sm bg-black relative">
                 <video
-                  src={message.mediaUrl}
+                  src={resolvedBlobUrl || message.mediaUrl}
                   controls
                   playsInline
                   className="max-h-72 w-full object-cover"
@@ -194,7 +213,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 }`}
                 onClick={() =>
                   onPreviewMedia({
-                    url: message.mediaUrl || '',
+                    url: resolvedBlobUrl || message.mediaUrl || '',
                     type: 'video',
                     name: message.fileName,
                     format: message.fileFormat,

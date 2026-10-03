@@ -17,6 +17,8 @@ import {
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { Conversation, Message, Story, UserProfile } from '../types';
 import { INITIAL_CHANNEL_MESSAGES, INITIAL_PUBLIC_CHANNELS, INITIAL_STORIES, DEMO_USERS } from './sampleData';
+import { generateXiaoAiReply, AI_PERSONA } from './aiPersonaService';
+import { storeMediaBlob } from '../utils/mediaStore';
 
 // Send a new message
 export async function sendMessage(
@@ -50,26 +52,76 @@ export async function sendMessage(
   };
 
   try {
-    const msgRef = doc(db, 'conversations', conversationId, 'messages', messageId);
-    await setDoc(msgRef, messageData);
-
-    // Also update parent conversation last message
+    // 1. Ensure parent conversation document is present in Firestore
     const convRef = doc(db, 'conversations', conversationId);
     const lastPreview = data.mediaType && data.mediaType !== 'none'
-      ? `[${data.fileFormat?.toUpperCase() || data.mediaType.toUpperCase()}] ${data.text || data.fileName || 'Attachment'}`
+      ? `[${data.fileFormat?.toUpperCase() || data.mediaType.toUpperCase()}] ${data.text || data.fileName || 'Media Attachment'}`
       : (data.text || 'Message');
+
+    const defaultChannel = INITIAL_PUBLIC_CHANNELS.find(c => c.id === conversationId);
 
     await setDoc(convRef, {
       id: conversationId,
+      type: defaultChannel?.type || (conversationId.includes('_dm_') || conversationId.startsWith('dm_') ? 'direct' : 'group'),
+      title: defaultChannel?.title || 'Chat',
+      avatar: defaultChannel?.avatar || '',
       lastMessageText: lastPreview,
       lastMessageSender: sender.displayName,
       lastMessageTime: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     }, { merge: true });
 
+    // 2. Save message to subcollection
+    const msgRef = doc(db, 'conversations', conversationId, 'messages', messageId);
+    await setDoc(msgRef, messageData);
+
+    // 3. Trigger Xiao Ai Human-like AI reply if chatting with Xiao Ai or mentioned
+    const isDirectWithAi = conversationId === 'dm_xiaoai_ai' || conversationId.includes('xiaoai');
+    const isAiMentioned = (data.text || '').toLowerCase().includes('@xiaoai') || (data.text || '').toLowerCase().includes('@ai');
+
+    if ((isDirectWithAi || isAiMentioned) && sender.uid !== AI_PERSONA.uid) {
+      setTimeout(async () => {
+        try {
+          const replyText = await generateXiaoAiReply({
+            userMessage: data.text || '',
+            senderName: sender.displayName,
+            hasImage: data.mediaType === 'image',
+            hasVideo: data.mediaType === 'video',
+            imagePosterDataUrl: data.mediaType === 'image' ? data.mediaUrl : undefined
+          });
+
+          const aiMsgId = `ai-msg-${Date.now()}`;
+          const aiMessageData: Message = {
+            id: aiMsgId,
+            conversationId,
+            senderId: AI_PERSONA.uid,
+            senderName: AI_PERSONA.displayName,
+            senderPhoto: AI_PERSONA.photoURL,
+            text: replyText,
+            mediaType: 'none',
+            reactions: { [sender.uid]: '❤️' },
+            readBy: [AI_PERSONA.uid],
+            createdAt: new Date().toISOString()
+          };
+
+          const aiDocRef = doc(db, 'conversations', conversationId, 'messages', aiMsgId);
+          await setDoc(aiDocRef, aiMessageData);
+
+          await setDoc(convRef, {
+            lastMessageText: replyText,
+            lastMessageSender: AI_PERSONA.displayName,
+            lastMessageTime: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          }, { merge: true });
+        } catch (aiErr) {
+          console.warn("Could not post AI response:", aiErr);
+        }
+      }, 1400); // 1.4s realistic human typing delay
+    }
+
     return messageId;
   } catch (error) {
-    console.warn("Could not save to Firestore, using client sync:", error);
+    console.error("Error saving message to Firestore:", error);
     return messageId;
   }
 }

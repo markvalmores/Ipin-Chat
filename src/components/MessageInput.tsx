@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { translateText } from '../utils/translator';
+import { compressImageForUpload, captureVideoPoster, storeMediaBlob } from '../utils/mediaStore';
 
 interface MessageInputProps {
   onSendMessage: (data: {
@@ -38,6 +39,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   const [text, setText] = useState('');
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [autoTranslate, setAutoTranslate] = useState(false);
+  const [isSending, setIsSending] = useState(false);
   const [selectedFile, setSelectedFile] = useState<{
     file: File;
     previewUrl: string;
@@ -155,6 +157,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
   // Sending
   const handleSend = async () => {
+    if (isSending) return;
     if (!text.trim() && !selectedFile) {
       // Messenger thumbs up default
       await onSendMessage({
@@ -164,44 +167,75 @@ export const MessageInput: React.FC<MessageInputProps> = ({
       return;
     }
 
-    let finalMessageText = text.trim();
+    setIsSending(true);
 
-    // Auto-translate if turned on
-    if (autoTranslate && finalMessageText) {
-      const translated = translateText(finalMessageText);
-      if (translated.pinyin) {
-        finalMessageText = `${finalMessageText}\n[Pinyin: ${translated.pinyin}] (${translated.translated})`;
-      } else {
-        finalMessageText = `${finalMessageText} (${translated.translated})`;
+    try {
+      let finalMessageText = text.trim();
+
+      // Auto-translate if turned on
+      if (autoTranslate && finalMessageText) {
+        const translated = translateText(finalMessageText);
+        if (translated.pinyin) {
+          finalMessageText = `${finalMessageText}\n[Pinyin: ${translated.pinyin}] (${translated.translated})`;
+        } else {
+          finalMessageText = `${finalMessageText} (${translated.translated})`;
+        }
       }
-    }
 
-    if (selectedFile) {
-      // Read data URL
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        const dataUrl = e.target?.result as string;
+      if (selectedFile) {
+        let finalMediaUrl = '';
+
+        if (selectedFile.type === 'image') {
+          // Compress image so it never exceeds Firestore 1MB limits
+          finalMediaUrl = await compressImageForUpload(selectedFile.file);
+        } else if (selectedFile.type === 'video') {
+          // If small enough (< 500KB), convert to dataUrl
+          if (selectedFile.size < 500 * 1024) {
+            finalMediaUrl = await new Promise<string>((res) => {
+              const reader = new FileReader();
+              reader.onload = () => res(reader.result as string);
+              reader.readAsDataURL(selectedFile.file);
+            });
+          } else {
+            // For larger videos, extract thumbnail poster and store blob
+            const poster = await captureVideoPoster(selectedFile.file);
+            const mediaKey = `vid_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+            await storeMediaBlob(mediaKey, selectedFile.file);
+            finalMediaUrl = poster || selectedFile.previewUrl;
+          }
+        } else {
+          // Audio or file
+          finalMediaUrl = await new Promise<string>((res) => {
+            const reader = new FileReader();
+            reader.onload = () => res(reader.result as string);
+            reader.readAsDataURL(selectedFile.file);
+          });
+        }
+
         await onSendMessage({
           text: finalMessageText,
-          mediaUrl: dataUrl,
+          mediaUrl: finalMediaUrl,
           mediaType: selectedFile.type,
           fileName: selectedFile.name,
           fileSize: selectedFile.size,
           fileFormat: selectedFile.format
         });
+
         setSelectedFile(null);
         setText('');
-      };
-      reader.readAsDataURL(selectedFile.file);
-    } else {
-      await onSendMessage({
-        text: finalMessageText,
-        mediaType: 'none'
-      });
-      setText('');
+      } else {
+        await onSendMessage({
+          text: finalMessageText,
+          mediaType: 'none'
+        });
+        setText('');
+      }
+    } catch (err) {
+      console.error("Failed to send message:", err);
+    } finally {
+      setIsSending(false);
+      setShowEmojiPicker(false);
     }
-
-    setShowEmojiPicker(false);
   };
 
   return (
