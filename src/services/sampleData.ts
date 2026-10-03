@@ -93,8 +93,8 @@ export const DEMO_USERS: UserProfile[] = [
     displayName: 'Chen Wei (陈伟)',
     email: 'chenwei@ipin.chat',
     photoURL: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-    bannerURL: 'https://images.unsplash.com/photo-1519501025264-65ba15a82390?w=800&auto=format&fit=crop&q=80',
-    bannerType: 'image',
+    bannerURL: 'https://www.youtube.com/watch?v=jfKfPfyJRdk',
+    bannerType: 'youtube', // Demo YouTube Auto-Looping video banner!
     status: 'online',
     note: 'Shenzhen Huaqiangbei market visit 🔌',
     noteEmoji: '🤖',

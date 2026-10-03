@@ -4,7 +4,7 @@ export interface UserProfile {
   email: string;
   photoURL?: string;
   bannerURL?: string;
-  bannerType?: 'image' | 'video';
+  bannerType?: 'image' | 'video' | 'youtube';
   status?: 'online' | 'offline' | 'away';
   note?: string;
   noteEmoji?: string;

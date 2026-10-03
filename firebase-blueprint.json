@@ -10,7 +10,7 @@
         "email": { "type": "string", "maxLength": 150, "description": "User email address" },
         "photoURL": { "type": "string", "description": "Avatar URL or base64" },
         "bannerURL": { "type": "string", "description": "Banner background URL or base64" },
-        "bannerType": { "type": "string", "enum": ["image", "video"], "description": "Type of banner media" },
+        "bannerType": { "type": "string", "enum": ["image", "video", "youtube"], "description": "Type of banner media" },
         "status": { "type": "string", "enum": ["online", "offline", "away"], "description": "Online presence status" },
         "note": { "type": "string", "maxLength": 120, "description": "Quick status note bubble" },
         "noteEmoji": { "type": "string", "maxLength": 10, "description": "Emoji attached to note" },

@@ -9,11 +9,14 @@ import {
   Globe,
   Sparkles,
   Users,
-  Film
+  Film,
+  Tv
 } from 'lucide-react';
 import { UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { searchUsersByName, subscribeToAllUsers } from '../services/chatService';
+import { BannerMedia } from './BannerMedia';
+import { isYouTubeUrl } from '../utils/youtube';
 
 interface SearchAccountsModalProps {
   isOpen: boolean;
@@ -143,24 +146,36 @@ export const SearchAccountsModal: React.FC<SearchAccountsModalProps> = ({
               return (
                 <div
                   key={user.uid}
-                  className="p-3.5 rounded-2xl border border-zinc-200 dark:border-zinc-800 hover:border-emerald-500/50 bg-zinc-50 dark:bg-zinc-800/60 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs"
+                  className="rounded-2xl border border-zinc-200 dark:border-zinc-800 hover:border-emerald-500/50 bg-zinc-50 dark:bg-zinc-800/60 overflow-hidden transition-all shadow-xs"
                 >
-                  <div className="flex items-start gap-3 min-w-0">
-                    {/* Avatar with online status */}
-                    <div className="relative shrink-0">
-                      <div className="w-12 h-12 rounded-2xl overflow-hidden ring-1 ring-zinc-200 dark:ring-zinc-700 bg-zinc-200">
-                        <img
-                          src={user.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${user.uid}`}
-                          alt={user.displayName}
-                          className="w-full h-full object-cover"
+                  {user.bannerURL && (
+                    <div className="w-full h-16 relative overflow-hidden bg-zinc-950">
+                      <BannerMedia bannerURL={user.bannerURL} bannerType={user.bannerType} className="w-full h-full" />
+                      {isYouTubeUrl(user.bannerURL) && (
+                        <span className="absolute top-1.5 right-2 px-2 py-0.5 rounded-full bg-red-600/90 text-white text-[9px] font-bold flex items-center gap-1 shadow-sm">
+                          <Tv size={10} /> YouTube Motion Banner
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-start gap-3 min-w-0">
+                      {/* Avatar with online status */}
+                      <div className="relative shrink-0">
+                        <div className="w-12 h-12 rounded-2xl overflow-hidden ring-1 ring-zinc-200 dark:ring-zinc-700 bg-zinc-200">
+                          <img
+                            src={user.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${user.uid}`}
+                            alt={user.displayName}
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                        <span
+                          className={`absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full ring-2 ring-white dark:ring-zinc-900 ${
+                            isOnline ? 'bg-emerald-500' : 'bg-zinc-400'
+                          }`}
                         />
                       </div>
-                      <span
-                        className={`absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full ring-2 ring-white dark:ring-zinc-900 ${
-                          isOnline ? 'bg-emerald-500' : 'bg-zinc-400'
-                        }`}
-                      />
-                    </div>
 
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5 flex-wrap">
@@ -210,7 +225,8 @@ export const SearchAccountsModal: React.FC<SearchAccountsModalProps> = ({
                     <span>Real-Time Chat</span>
                   </button>
                 </div>
-              );
+              </div>
+            );
             })
           )}
         </div>

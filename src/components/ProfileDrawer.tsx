@@ -12,10 +12,14 @@ import {
   Sparkles,
   KeyRound,
   Check,
-  Film
+  Film,
+  Play,
+  Tv
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { DEMO_USERS } from '../services/sampleData';
+import { BannerMedia } from './BannerMedia';
+import { isYouTubeUrl, extractYouTubeId } from '../utils/youtube';
 
 interface ProfileDrawerProps {
   isOpen: boolean;
@@ -43,7 +47,9 @@ export const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
   const [location, setLocation] = useState(profile?.location || '');
   const [bio, setBio] = useState(profile?.bio || '');
   const [bannerURL, setBannerURL] = useState(profile?.bannerURL || '');
-  const [bannerType, setBannerType] = useState<'image' | 'video'>(profile?.bannerType || 'image');
+  const [bannerType, setBannerType] = useState<'image' | 'video' | 'youtube'>(
+    profile?.bannerType || (isYouTubeUrl(profile?.bannerURL) ? 'youtube' : 'image')
+  );
   const [photoURL, setPhotoURL] = useState(profile?.photoURL || '');
   const [status, setStatus] = useState<'online' | 'away' | 'offline'>(profile?.status || 'online');
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -88,17 +94,21 @@ export const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
     e.preventDefault();
     setIsSaving(true);
     try {
+      const finalBannerType = isYouTubeUrl(bannerURL)
+        ? 'youtube'
+        : bannerType;
+
       await updateProfileData({
         displayName: displayName.trim() || profile.displayName,
         location: location.trim(),
         bio: bio.trim(),
         bannerURL: bannerURL.trim(),
-        bannerType,
+        bannerType: finalBannerType,
         photoURL: photoURL.trim(),
         status
       });
       setIsEditing(false);
-      setFeedback('Profile updated successfully!');
+      setFeedback('Profile & YouTube Video Banner updated successfully!');
       setTimeout(() => setFeedback(null), 3000);
     } catch (err) {
       console.error(err);
@@ -118,48 +128,43 @@ export const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
     }
   };
 
+  const isCurrentBannerYouTube = Boolean(extractYouTubeId(profile.bannerURL) || profile.bannerType === 'youtube');
+  const isCurrentBannerMp4 = profile.bannerType === 'video' || profile.bannerURL?.endsWith('.mp4');
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
       <div className="w-full max-w-md bg-white dark:bg-zinc-900 h-full shadow-2xl flex flex-col overflow-y-auto border-l border-zinc-200 dark:border-zinc-800 animate-in slide-in-from-right duration-300">
-        {/* Banner Cover with MP4 Video or Image Support */}
-        <div className="relative w-full h-44 bg-zinc-800 overflow-hidden">
-          {profile.bannerURL ? (
-            profile.bannerType === 'video' || profile.bannerURL.endsWith('.mp4') ? (
-              <video
-                src={profile.bannerURL}
-                autoPlay
-                loop
-                muted
-                playsInline
-                className="w-full h-full object-cover"
-              />
-            ) : (
-              <img
-                src={profile.bannerURL}
-                alt="Profile Banner"
-                className="w-full h-full object-cover"
-              />
-            )
-          ) : (
-            <div className="w-full h-full bg-gradient-to-r from-emerald-800 via-teal-700 to-emerald-900" />
-          )}
+        {/* Banner Cover with YouTube Links as MP4 video, Direct MP4 Video, or Image Support */}
+        <div className="relative w-full h-48 bg-zinc-950 overflow-hidden">
+          <BannerMedia
+            bannerURL={profile.bannerURL}
+            bannerType={profile.bannerType}
+            className="w-full h-full"
+          />
 
           {/* Banner format badge */}
-          {profile.bannerType === 'video' && (
-            <div className="absolute top-4 left-4 px-2 py-0.5 rounded-full bg-black/60 backdrop-blur-md text-white text-[10px] font-semibold flex items-center gap-1">
+          {isCurrentBannerYouTube && (
+            <div className="absolute top-4 left-4 px-2.5 py-1 rounded-full bg-red-600/90 backdrop-blur-md text-white text-[10px] font-bold flex items-center gap-1.5 shadow-lg">
+              <Tv size={12} className="text-white" />
+              <span>YouTube Video Banner • Auto-Looping</span>
+            </div>
+          )}
+
+          {!isCurrentBannerYouTube && isCurrentBannerMp4 && (
+            <div className="absolute top-4 left-4 px-2.5 py-1 rounded-full bg-black/70 backdrop-blur-md text-white text-[10px] font-bold flex items-center gap-1.5 shadow-lg">
               <Film size={12} className="text-emerald-400" />
-              <span>MP4 Motion Banner</span>
+              <span>MP4 Motion Banner • Auto-Looping</span>
             </div>
           )}
 
           {/* Top action buttons */}
-          <div className="absolute top-4 right-4 flex items-center gap-2">
+          <div className="absolute top-4 right-4 flex items-center gap-2 z-20">
             {isEditing && (
               <button
                 type="button"
                 onClick={() => bannerInputRef.current?.click()}
                 className="p-2 rounded-full bg-black/60 hover:bg-black/80 text-white backdrop-blur-md transition-colors"
-                title="Change Cover Banner (PNG, JPG, GIF, MP4)"
+                title="Upload Banner File (PNG, JPG, GIF, MP4)"
               >
                 <Camera size={16} />
               </button>
@@ -322,29 +327,90 @@ export const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-zinc-600 dark:text-zinc-400 mb-1">
-                  Profile Banner URL (Image or MP4 Video)
-                </label>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="text-xs font-semibold text-zinc-600 dark:text-zinc-400">
+                    Profile Banner Cover (YouTube Link, MP4 Video or Image)
+                  </label>
+                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold">
+                    Auto-Loops Forever
+                  </span>
+                </div>
+
                 <div className="flex gap-2">
                   <input
                     type="text"
                     value={bannerURL}
                     onChange={(e) => {
-                      setBannerURL(e.target.value);
-                      if (e.target.value.endsWith('.mp4')) setBannerType('video');
+                      const val = e.target.value;
+                      setBannerURL(val);
+                      if (isYouTubeUrl(val)) {
+                        setBannerType('youtube');
+                      } else if (val.endsWith('.mp4') || val.includes('.mp4?')) {
+                        setBannerType('video');
+                      }
                     }}
-                    placeholder="https://... (.jpg, .png, .gif, or .mp4)"
-                    className="flex-1 px-3 py-2 text-xs rounded-xl bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-900 dark:text-zinc-100"
+                    placeholder="Paste YouTube link (https://youtube.com/watch?v=...) or MP4 video URL"
+                    className="flex-1 px-3 py-2 text-xs rounded-xl bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-900 dark:text-zinc-100 focus:ring-1 focus:ring-emerald-500"
                   />
                   <select
                     value={bannerType}
-                    onChange={(e) => setBannerType(e.target.value as 'image' | 'video')}
+                    onChange={(e) => setBannerType(e.target.value as any)}
                     className="px-2 py-2 text-xs rounded-xl bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-900 dark:text-zinc-100"
                   >
-                    <option value="image">Image</option>
+                    <option value="youtube">YouTube Video</option>
                     <option value="video">MP4 Video</option>
+                    <option value="image">Image</option>
                   </select>
                 </div>
+
+                {/* YouTube Link preset helpers for easy testing */}
+                <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[10px] text-zinc-400 font-medium">Try YouTube Presets:</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBannerURL('https://www.youtube.com/watch?v=jfKfPfyJRdk');
+                      setBannerType('youtube');
+                    }}
+                    className="px-2 py-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-[10px] text-zinc-700 dark:text-zinc-300 hover:bg-emerald-100 dark:hover:bg-emerald-950/60 transition-colors"
+                  >
+                    🇨🇳 Lofi Beats
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBannerURL('https://www.youtube.com/watch?v=1ZyhQj47R60');
+                      setBannerType('youtube');
+                    }}
+                    className="px-2 py-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-[10px] text-zinc-700 dark:text-zinc-300 hover:bg-emerald-100 dark:hover:bg-emerald-950/60 transition-colors"
+                  >
+                    🌿 Emerald Nature
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBannerURL('https://www.youtube.com/watch?v=V-_O7nl0Ii0');
+                      setBannerType('youtube');
+                    }}
+                    className="px-2 py-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-[10px] text-zinc-700 dark:text-zinc-300 hover:bg-emerald-100 dark:hover:bg-emerald-950/60 transition-colors"
+                  >
+                    ⚡️ Night City
+                  </button>
+                </div>
+
+                {/* Live Banner Preview inside Edit Form */}
+                {bannerURL && (
+                  <div className="mt-2 rounded-xl overflow-hidden h-24 border border-zinc-200 dark:border-zinc-700 relative">
+                    <BannerMedia
+                      bannerURL={bannerURL}
+                      bannerType={bannerType}
+                      className="w-full h-full"
+                    />
+                    <div className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/70 text-white text-[9px] font-mono">
+                      {isYouTubeUrl(bannerURL) ? 'YOUTUBE AUTO-LOOP' : bannerType.toUpperCase()}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div>
