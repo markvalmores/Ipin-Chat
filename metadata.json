@@ -1,0 +1,7 @@
+{
+  "name": "ipin Messenger Web App",
+  "description": "Real-time cross-border messenger bridging China and the world with emerald styling, stories, notes, and rich media sharing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

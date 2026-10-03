@@ -1,0 +1,120 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile and credentials metadata",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "User unique identifier" },
+        "displayName": { "type": "string", "maxLength": 100, "description": "User display name" },
+        "email": { "type": "string", "maxLength": 150, "description": "User email address" },
+        "photoURL": { "type": "string", "description": "Avatar URL or base64" },
+        "bannerURL": { "type": "string", "description": "Banner background URL or base64" },
+        "bannerType": { "type": "string", "enum": ["image", "video"], "description": "Type of banner media" },
+        "status": { "type": "string", "enum": ["online", "offline", "away"], "description": "Online presence status" },
+        "note": { "type": "string", "maxLength": 120, "description": "Quick status note bubble" },
+        "noteEmoji": { "type": "string", "maxLength": 10, "description": "Emoji attached to note" },
+        "noteUpdatedAt": { "type": "string", "description": "ISO timestamp of note update" },
+        "location": { "type": "string", "maxLength": 80, "description": "User location (e.g. Shanghai, Beijing, London, NY)" },
+        "bio": { "type": "string", "maxLength": 300, "description": "User short bio" },
+        "createdAt": { "type": "string", "description": "Account creation timestamp" },
+        "lastSeen": { "type": "string", "description": "Last active timestamp" }
+      },
+      "required": ["uid", "displayName", "email"]
+    },
+    "ActivePresence": {
+      "title": "ActivePresence",
+      "description": "Heartbeat presence document for real-time active counter",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "User ID" },
+        "displayName": { "type": "string", "description": "User display name" },
+        "photoURL": { "type": "string", "description": "User avatar" },
+        "lastActive": { "type": "string", "description": "ISO timestamp or timestamp string" },
+        "isOnline": { "type": "boolean", "description": "Whether currently active" }
+      },
+      "required": ["uid", "displayName", "isOnline"]
+    },
+    "Conversation": {
+      "title": "Conversation",
+      "description": "Messenger conversation thread",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique conversation ID" },
+        "type": { "type": "string", "enum": ["direct", "group"], "description": "Direct chat or group bridge" },
+        "title": { "type": "string", "maxLength": 100, "description": "Channel or chat title" },
+        "description": { "type": "string", "maxLength": 300, "description": "Channel description" },
+        "participantIds": { "type": "array", "description": "List of user UIDs" },
+        "lastMessageText": { "type": "string", "description": "Preview of last message" },
+        "lastMessageSender": { "type": "string", "description": "Name of last message sender" },
+        "lastMessageTime": { "type": "string", "description": "Timestamp of last message" },
+        "updatedAt": { "type": "string", "description": "Last updated timestamp" },
+        "createdAt": { "type": "string", "description": "Created timestamp" }
+      },
+      "required": ["id", "type", "participantIds"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Chat message with rich media and reactions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique message ID" },
+        "conversationId": { "type": "string", "description": "Conversation ID" },
+        "senderId": { "type": "string", "description": "Sender UID" },
+        "senderName": { "type": "string", "description": "Sender display name" },
+        "senderPhoto": { "type": "string", "description": "Sender avatar" },
+        "text": { "type": "string", "maxLength": 10000, "description": "Message text" },
+        "mediaUrl": { "type": "string", "description": "Attached media URL or data" },
+        "mediaType": { "type": "string", "enum": ["image", "video", "audio", "file", "none"], "description": "Media type" },
+        "fileName": { "type": "string", "maxLength": 200, "description": "Attached file original name" },
+        "fileSize": { "type": "number", "description": "Attached file size in bytes" },
+        "fileFormat": { "type": "string", "maxLength": 20, "description": "Format: png, gif, mp4, avi, flv, swf, bmp, etc." },
+        "reactions": { "type": "object", "description": "Map of UID to reaction emoji" },
+        "readBy": { "type": "array", "description": "List of user IDs who read this message" },
+        "createdAt": { "type": "string", "description": "Message creation timestamp" }
+      },
+      "required": ["id", "conversationId", "senderId", "senderName", "createdAt"]
+    },
+    "Story": {
+      "title": "Story",
+      "description": "Messenger 24-hour story post",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Story unique ID" },
+        "userId": { "type": "string", "description": "Author UID" },
+        "userName": { "type": "string", "description": "Author display name" },
+        "userPhoto": { "type": "string", "description": "Author avatar" },
+        "mediaUrl": { "type": "string", "description": "Photo or video media URL" },
+        "mediaType": { "type": "string", "enum": ["image", "video", "text"], "description": "Type of story" },
+        "text": { "type": "string", "maxLength": 500, "description": "Story caption or text" },
+        "bgColor": { "type": "string", "maxLength": 50, "description": "Background gradient or color for text stories" },
+        "viewers": { "type": "array", "description": "Array of user IDs who viewed the story" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "expiresAt": { "type": "string", "description": "Expiration timestamp" }
+      },
+      "required": ["id", "userId", "userName", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Public user profiles and metadata"
+    },
+    "/active_presences/{userId}": {
+      "schema": "ActivePresence",
+      "description": "Online status and active pulse counter"
+    },
+    "/conversations/{conversationId}": {
+      "schema": "Conversation",
+      "description": "Conversation threads and public bridge channels"
+    },
+    "/conversations/{conversationId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Real-time messages with photos, videos, and reactions"
+    },
+    "/stories/{storyId}": {
+      "schema": "Story",
+      "description": "24-hour stories"
+    }
+  }
+}
