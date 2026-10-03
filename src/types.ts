@@ -25,7 +25,7 @@ export interface ActivePresence {
 
 export interface Conversation {
   id: string;
-  type: 'direct' | 'group';
+  type: 'direct' | 'group' | 'channel';
   title?: string;
   description?: string;
   avatar?: string;
@@ -41,6 +41,12 @@ export interface Conversation {
   updatedAt?: string;
   createdAt?: string;
   unreadCount?: number;
+  creatorId?: string;
+  topic?: string;
+  category?: string;
+  admins?: string[];
+  memberCount?: number;
+  inviteCode?: string;
 }
 
 export type MediaType = 'image' | 'video' | 'audio' | 'file' | 'none';

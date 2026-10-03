@@ -9,7 +9,9 @@ import {
   Languages,
   ChevronLeft,
   Users,
-  Sparkles
+  Sparkles,
+  Hash,
+  Crown
 } from 'lucide-react';
 import { Conversation, Message, UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -27,6 +29,7 @@ import { MediaPreviewModal } from './MediaPreviewModal';
 import { UserProfileModal } from './UserProfileModal';
 import { TranslatorModal } from './TranslatorModal';
 import { CallModal, CallType } from './CallModal';
+import { ChannelMembersDrawer } from './ChannelMembersDrawer';
 
 interface ChatAreaProps {
   conversation: Conversation | null;
@@ -47,6 +50,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [inspectedUser, setInspectedUser] = useState<UserProfile | null>(null);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isTranslatorModalOpen, setIsTranslatorModalOpen] = useState(false);
+  const [isMembersDrawerOpen, setIsMembersDrawerOpen] = useState(false);
   const [activeCall, setActiveCall] = useState<{
     isOpen: boolean;
     type: CallType;
@@ -217,8 +221,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
-              <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-100 truncate group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
-                {displayInfo.title}
+              <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-100 truncate group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors flex items-center gap-1">
+                {conversation.type === 'group' && !displayInfo.title.startsWith('#') && (
+                  <span className="text-emerald-600 dark:text-emerald-400 font-black">#</span>
+                )}
+                <span>{displayInfo.title}</span>
               </h2>
               {otherUser && (
                 <span className="text-[10px] text-zinc-400 group-hover:text-emerald-500 transition-colors font-medium">
@@ -228,7 +235,22 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </div>
 
             <div className="flex items-center gap-2 text-[11px] text-zinc-500 flex-wrap">
-              {isOtherUserOnline ? (
+              {conversation.type === 'group' ? (
+                <>
+                  <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-bold font-mono">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                    👥 {conversation.memberCount || conversation.participantIds.length || 2} / 1,000 members
+                  </span>
+                  {conversation.topic && (
+                    <>
+                      <span>•</span>
+                      <span className="hidden md:inline truncate max-w-xs text-zinc-400">
+                        {conversation.topic}
+                      </span>
+                    </>
+                  )}
+                </>
+              ) : isOtherUserOnline ? (
                 <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                   Active Now
@@ -251,6 +273,25 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
         {/* Messenger Action Icons */}
         <div className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
+          {/* Group Channel Members Toggle Button */}
+          {conversation.type === 'group' && (
+            <button
+              type="button"
+              onClick={() => setIsMembersDrawerOpen(!isMembersDrawerOpen)}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border transition-all text-xs font-semibold ${
+                isMembersDrawerOpen
+                  ? 'bg-emerald-600 text-white border-emerald-500 shadow-sm'
+                  : 'bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 border-emerald-500/20'
+              }`}
+              title="View Channel Members (2 to 1,000 members)"
+            >
+              <Users size={15} />
+              <span className="font-mono text-xs hidden sm:inline">
+                {conversation.memberCount || conversation.participantIds.length || 2}
+              </span>
+            </button>
+          )}
+
           {/* Dedicated Chinese ⇄ English Translator Button */}
           <button
             type="button"
@@ -320,31 +361,64 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
       {/* 2. Messages List Scroll Container */}
       <div className="flex-1 overflow-y-auto p-2 sm:p-4 space-y-1">
-        {/* Top Channel Welcome Card */}
-        <div className="my-6 p-6 mx-auto max-w-md rounded-3xl bg-zinc-50 dark:bg-zinc-900/60 border border-emerald-500/20 text-center shadow-xs">
-          <div
-            onClick={handleOpenHeaderProfile}
-            className={`w-14 h-14 rounded-2xl mx-auto mb-3 overflow-hidden ring-2 ring-emerald-500/30 ${
-              otherUser ? 'cursor-pointer hover:scale-105 transition-transform' : ''
-            }`}
-          >
-            <img
-              src={displayInfo.avatar}
-              alt={displayInfo.title}
-              className="w-full h-full object-cover"
-            />
+        {/* Top Channel Welcome Card (Discord-style for group chats) */}
+        {conversation.type === 'group' ? (
+          <div className="my-6 p-6 mx-auto max-w-lg rounded-3xl bg-zinc-50 dark:bg-zinc-900/60 border border-emerald-500/20 text-left shadow-xs space-y-3">
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white flex items-center justify-center font-black text-2xl shadow-lg shadow-emerald-600/20">
+              #
+            </div>
+            <div>
+              <h2 className="text-xl sm:text-2xl font-black text-zinc-900 dark:text-zinc-100">
+                Welcome to {displayInfo.title}!
+              </h2>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed">
+                This is the start of the <strong>{displayInfo.title}</strong> channel.
+                {conversation.topic && (
+                  <span className="block mt-1 text-emerald-600 dark:text-emerald-400 font-medium">
+                    📌 Topic: {conversation.topic}
+                  </span>
+                )}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 pt-2 border-t border-zinc-200/60 dark:border-zinc-800 text-xs flex-wrap">
+              <span className="px-2.5 py-1 rounded-xl bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 font-mono font-bold">
+                👥 {conversation.memberCount || conversation.participantIds.length || 2} / 1,000 Members
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsMembersDrawerOpen(true)}
+                className="px-3 py-1 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition-colors shadow-xs"
+              >
+                + Member List & Invite
+              </button>
+            </div>
           </div>
-          <h3 className="text-base font-bold text-zinc-900 dark:text-zinc-100">
-            {displayInfo.title}
-          </h3>
-          <p className="text-xs text-zinc-500 mt-1 leading-relaxed">
-            {conversation.description || `Direct encrypted communication on ipin Messenger.`}
-          </p>
-          <div className="mt-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[11px] font-semibold">
-            <ShieldCheck size={13} />
-            Unrestricted Cross-Border Route Active
+        ) : (
+          <div className="my-6 p-6 mx-auto max-w-md rounded-3xl bg-zinc-50 dark:bg-zinc-900/60 border border-emerald-500/20 text-center shadow-xs">
+            <div
+              onClick={handleOpenHeaderProfile}
+              className={`w-14 h-14 rounded-2xl mx-auto mb-3 overflow-hidden ring-2 ring-emerald-500/30 ${
+                otherUser ? 'cursor-pointer hover:scale-105 transition-transform' : ''
+              }`}
+            >
+              <img
+                src={displayInfo.avatar}
+                alt={displayInfo.title}
+                className="w-full h-full object-cover"
+              />
+            </div>
+            <h3 className="text-base font-bold text-zinc-900 dark:text-zinc-100">
+              {displayInfo.title}
+            </h3>
+            <p className="text-xs text-zinc-500 mt-1 leading-relaxed">
+              {conversation.description || `Direct encrypted communication on ipin Messenger.`}
+            </p>
+            <div className="mt-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[11px] font-semibold">
+              <ShieldCheck size={13} />
+              Unrestricted Cross-Border Route Active
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Message Items */}
         {messages.map((msg, index) => {
@@ -421,6 +495,24 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           callType={activeCall.type}
           recipient={activeCall.recipient}
           onEndCall={() => setActiveCall(null)}
+        />
+      )}
+
+      {/* 8. Discord-Style Channel Members Drawer */}
+      {conversation.type === 'group' && (
+        <ChannelMembersDrawer
+          conversation={conversation}
+          isOpen={isMembersDrawerOpen}
+          onClose={() => setIsMembersDrawerOpen(false)}
+          onSelectUserChat={(u) => {
+            onSelectUserChat?.(u);
+            setIsMembersDrawerOpen(false);
+          }}
+          onInspectUser={(u) => {
+            setInspectedUser(u);
+            setIsProfileModalOpen(true);
+          }}
+          registeredUsers={allUsers}
         />
       )}
     </div>

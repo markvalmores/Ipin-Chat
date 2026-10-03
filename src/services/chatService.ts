@@ -223,6 +223,28 @@ export function subscribeToMessages(
   return unsubscribe;
 }
 
+// Local persistent group chats helper
+const LOCAL_GROUPCHATS_KEY = 'ipin_local_groupchats_v2';
+
+function getLocalGroupChats(): Conversation[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_GROUPCHATS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveLocalGroupChat(gc: Conversation) {
+  try {
+    const list = getLocalGroupChats().filter((g) => g.id !== gc.id);
+    list.unshift(gc);
+    localStorage.setItem(LOCAL_GROUPCHATS_KEY, JSON.stringify(list));
+  } catch (e) {
+    // Silent
+  }
+}
+
 // Subscribe to conversations list
 export function subscribeToConversations(
   currentUserId: string,
@@ -230,28 +252,28 @@ export function subscribeToConversations(
 ) {
   const convsRef = collection(db, 'conversations');
 
-  const unsubscribe = onSnapshot(convsRef, (snapshot) => {
-    const list: Conversation[] = [];
-    snapshot.forEach((docSnap) => {
-      const data = docSnap.data() as Conversation;
-      // Include if it's group bridge or user is a participant
-      if (data.type === 'group' || (data.participantIds && data.participantIds.includes(currentUserId))) {
-        list.push(data);
+  const emitMerged = (firestoreList: Conversation[] = []) => {
+    const localList = getLocalGroupChats();
+    const map = new Map<string, Conversation>();
+
+    // 1. Initial public Discord channels
+    INITIAL_PUBLIC_CHANNELS.forEach((c) => map.set(c.id, c));
+
+    // 2. Local custom group chats
+    localList.forEach((c) => {
+      if (c.type === 'group' || (c.participantIds && c.participantIds.includes(currentUserId))) {
+        map.set(c.id, { ...(map.get(c.id) || {}), ...c });
       }
     });
 
-    // Merge with predefined public channels if not existing in Firestore
-    const merged = [...INITIAL_PUBLIC_CHANNELS];
-    list.forEach(c => {
-      const idx = merged.findIndex(m => m.id === c.id);
-      if (idx >= 0) {
-        merged[idx] = { ...merged[idx], ...c };
-      } else {
-        merged.push(c);
+    // 3. Firestore conversations
+    firestoreList.forEach((c) => {
+      if (c.type === 'group' || (c.participantIds && c.participantIds.includes(currentUserId))) {
+        map.set(c.id, { ...(map.get(c.id) || {}), ...c });
       }
     });
 
-    // Sort by latest message
+    const merged = Array.from(map.values());
     merged.sort((a, b) => {
       const timeA = new Date(a.lastMessageTime || a.updatedAt || 0).getTime();
       const timeB = new Date(b.lastMessageTime || b.updatedAt || 0).getTime();
@@ -259,11 +281,149 @@ export function subscribeToConversations(
     });
 
     onUpdate(merged);
+  };
+
+  // Immediate emit
+  emitMerged([]);
+
+  const unsubscribe = onSnapshot(convsRef, (snapshot) => {
+    const list: Conversation[] = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data() as Conversation;
+      list.push(data);
+    });
+    emitMerged(list);
   }, (error) => {
-    onUpdate(INITIAL_PUBLIC_CHANNELS);
+    emitMerged([]);
   });
 
-  return unsubscribe;
+  const handleGroupUpdate = () => {
+    emitMerged([]);
+  };
+  window.addEventListener('ipin_group_updated', handleGroupUpdate);
+
+  return () => {
+    unsubscribe();
+    window.removeEventListener('ipin_group_updated', handleGroupUpdate);
+  };
+}
+
+// Create a Discord-style Group Chat with 2 to 1,000 members
+export async function createGroupChat(
+  creator: UserProfile,
+  data: {
+    title: string;
+    description?: string;
+    avatar?: string;
+    participantIds: string[];
+    topic?: string;
+    category?: string;
+    simulatedTotalMembers?: number;
+  }
+): Promise<Conversation> {
+  const groupId = `gc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const now = new Date().toISOString();
+
+  // Combine creator and selected participants
+  const uniqueParticipants = Array.from(new Set([creator.uid, ...data.participantIds]));
+
+  // Calculate member count: min 2, max 1,000
+  const chosenMembers = data.simulatedTotalMembers
+    ? Math.min(1000, Math.max(2, data.simulatedTotalMembers))
+    : Math.min(1000, Math.max(2, uniqueParticipants.length));
+
+  const formattedTitle = data.title.trim().startsWith('#')
+    ? data.title.trim()
+    : `# ${data.title.trim()}`;
+
+  const newGroup: Conversation = {
+    id: groupId,
+    type: 'group',
+    title: formattedTitle,
+    description:
+      data.description?.trim() ||
+      `Discord-style community channel for ${data.title}. Active with up to 1,000 members.`,
+    avatar:
+      data.avatar ||
+      `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(data.title)}`,
+    participantIds: uniqueParticipants,
+    participantData: {
+      [creator.uid]: {
+        displayName: creator.displayName,
+        photoURL: creator.photoURL,
+        location: creator.location
+      }
+    },
+    creatorId: creator.uid,
+    admins: [creator.uid],
+    topic: data.topic?.trim() || `Welcome to ${formattedTitle}! Cross-border discussion & bridge.`,
+    category: data.category || 'General',
+    memberCount: chosenMembers,
+    inviteCode: `ipin.chat/gc/${groupId.substring(3, 9)}`,
+    lastMessageText: `🎉 ${creator.displayName} created group channel "${formattedTitle}" (${chosenMembers} members)`,
+    lastMessageSender: 'System',
+    lastMessageTime: now,
+    createdAt: now,
+    updatedAt: now
+  };
+
+  // 1. Save to local storage for immediate zero-latency feedback
+  saveLocalGroupChat(newGroup);
+  window.dispatchEvent(new CustomEvent('ipin_group_updated', { detail: newGroup }));
+
+  // 2. Persist to Firestore
+  try {
+    const groupRef = doc(db, 'conversations', groupId);
+    await setDoc(groupRef, newGroup);
+
+    // Initial system greeting message in channel
+    const welcomeMsg: Message = {
+      id: `msg_welcome_${Date.now()}`,
+      conversationId: groupId,
+      senderId: 'system-bot',
+      senderName: 'ipin Bot 🤖',
+      senderPhoto: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150',
+      text: `Welcome to **${formattedTitle}**! 🚀\n\n📌 **Channel Topic:** ${newGroup.topic}\n👥 **Members:** ${chosenMembers} / 1,000 capacity.\n\nEnjoy unlimited photos, videos of any size, animated GIFs, voice and video calls with real-time filters!`,
+      createdAt: now,
+      reactions: { [creator.uid]: '🎉' },
+      readBy: [creator.uid]
+    };
+    const msgRef = doc(db, 'conversations', groupId, 'messages', welcomeMsg.id);
+    await setDoc(msgRef, welcomeMsg);
+  } catch (err) {
+    console.warn('Could not write group to Firestore:', err);
+  }
+
+  return newGroup;
+}
+
+// Add members to an existing group chat (up to 1,000 members)
+export async function addMembersToGroupChat(
+  conversationId: string,
+  newMemberIds: string[],
+  addMemberCount: number = 0
+): Promise<void> {
+  const localList = getLocalGroupChats();
+  const found = localList.find((g) => g.id === conversationId);
+  if (found) {
+    const merged = Array.from(new Set([...found.participantIds, ...newMemberIds]));
+    found.participantIds = merged;
+    found.memberCount = Math.min(
+      1000,
+      Math.max(merged.length, (found.memberCount || merged.length) + addMemberCount)
+    );
+    saveLocalGroupChat(found);
+    window.dispatchEvent(new CustomEvent('ipin_group_updated'));
+  }
+
+  try {
+    const convRef = doc(db, 'conversations', conversationId);
+    await updateDoc(convRef, {
+      participantIds: arrayUnion(...newMemberIds)
+    });
+  } catch (e) {
+    // Silent
+  }
 }
 
 // Helper for local persistent 24-hour stories

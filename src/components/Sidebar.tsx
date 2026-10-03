@@ -9,7 +9,8 @@ import {
   UserCheck,
   ChevronDown,
   Circle,
-  UserPlus
+  UserPlus,
+  Hash
 } from 'lucide-react';
 import { Conversation, Story, UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -30,6 +31,7 @@ interface SidebarProps {
   onOpenAuthModal: () => void;
   onStartDirectChat: (user: UserProfile) => void;
   onOpenSearchAccountsModal: () => void;
+  onOpenCreateGroupModal: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -43,7 +45,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenProfileDrawer,
   onOpenAuthModal,
   onStartDirectChat,
-  onOpenSearchAccountsModal
+  onOpenSearchAccountsModal,
+  onOpenCreateGroupModal
 }) => {
   const { profile, user, activeCount, activePresences } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
@@ -115,6 +118,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {/* User avatar & New Chat Actions */}
         <div className="flex items-center gap-1.5 relative">
+          {/* Create Group Chat Button */}
+          <button
+            type="button"
+            onClick={onOpenCreateGroupModal}
+            className="p-2 rounded-full hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 transition-colors"
+            title="Create Discord Group Chat (2 to 1,000 members)"
+          >
+            <Hash size={19} strokeWidth={2.5} />
+          </button>
+
           {/* Find Friends / Search Account Name Button */}
           <button
             type="button"
@@ -130,15 +143,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
             type="button"
             onClick={() => setShowNewChatDropdown(!showNewChatDropdown)}
             className="p-2 rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 transition-colors"
-            title="Start direct conversation"
+            title="Start conversation or channel"
           >
             <MessageSquarePlus size={19} />
           </button>
 
           {/* New Chat Dropdown */}
           {showNewChatDropdown && (
-            <div className="absolute top-12 right-0 z-40 w-64 bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl border border-zinc-200 dark:border-zinc-800 p-2 animate-in zoom-in-95 duration-150">
-              <p className="text-[11px] font-bold text-zinc-400 px-3 py-1.5 uppercase tracking-wider">
+            <div className="absolute top-12 right-0 z-40 w-68 bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl border border-zinc-200 dark:border-zinc-800 p-2 animate-in zoom-in-95 duration-150">
+              {/* Create Group Chat Option */}
+              <button
+                type="button"
+                onClick={() => {
+                  setShowNewChatDropdown(false);
+                  onOpenCreateGroupModal();
+                }}
+                className="w-full p-2.5 mb-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 font-bold text-xs flex items-center gap-2 transition-colors border border-emerald-500/20 text-left"
+              >
+                <div className="w-6 h-6 rounded-lg bg-emerald-600 text-white flex items-center justify-center font-black text-xs shrink-0 shadow-xs">
+                  #
+                </div>
+                <div className="min-w-0">
+                  <p className="font-bold text-xs text-emerald-800 dark:text-emerald-200">Create Group Chat</p>
+                  <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-normal">Discord-style • 2 to 1,000 members</p>
+                </div>
+              </button>
+
+              <p className="text-[10px] font-bold text-zinc-400 px-3 py-1 uppercase tracking-wider">
                 Direct Message Active User
               </p>
               <div className="space-y-1">
@@ -214,39 +245,51 @@ export const Sidebar: React.FC<SidebarProps> = ({
         onSelectUserDirectChat={onStartDirectChat}
       />
 
-      {/* 4. Filter Tabs */}
-      <div className="flex border-b border-zinc-100 dark:border-zinc-800 px-3.5 pt-2 gap-1 text-xs">
+      {/* 4. Filter Tabs & New Group Button */}
+      <div className="flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800 px-3.5 pt-2 text-xs">
+        <div className="flex gap-1">
+          <button
+            onClick={() => setFilterTab('all')}
+            className={`pb-2 px-2 font-semibold border-b-2 transition-colors ${
+              filterTab === 'all'
+                ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
+                : 'border-transparent text-zinc-400 hover:text-zinc-600'
+            }`}
+          >
+            All
+          </button>
+          <button
+            onClick={() => setFilterTab('bridges')}
+            className={`pb-2 px-2 font-semibold border-b-2 transition-colors flex items-center gap-1 ${
+              filterTab === 'bridges'
+                ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
+                : 'border-transparent text-zinc-400 hover:text-zinc-600'
+            }`}
+          >
+            <Globe size={13} />
+            Channels
+          </button>
+          <button
+            onClick={() => setFilterTab('direct')}
+            className={`pb-2 px-2 font-semibold border-b-2 transition-colors flex items-center gap-1 ${
+              filterTab === 'direct'
+                ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
+                : 'border-transparent text-zinc-400 hover:text-zinc-600'
+            }`}
+          >
+            <Users size={13} />
+            Direct
+          </button>
+        </div>
+
         <button
-          onClick={() => setFilterTab('all')}
-          className={`pb-2 px-2.5 font-semibold border-b-2 transition-colors ${
-            filterTab === 'all'
-              ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
-              : 'border-transparent text-zinc-400 hover:text-zinc-600'
-          }`}
+          type="button"
+          onClick={onOpenCreateGroupModal}
+          className="mb-1.5 px-2.5 py-1 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] flex items-center gap-1 transition-all shadow-xs active:scale-95"
+          title="Create Discord Group Chat (2 to 1,000 members)"
         >
-          All
-        </button>
-        <button
-          onClick={() => setFilterTab('bridges')}
-          className={`pb-2 px-2.5 font-semibold border-b-2 transition-colors flex items-center gap-1 ${
-            filterTab === 'bridges'
-              ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
-              : 'border-transparent text-zinc-400 hover:text-zinc-600'
-          }`}
-        >
-          <Globe size={13} />
-          Global Bridges
-        </button>
-        <button
-          onClick={() => setFilterTab('direct')}
-          className={`pb-2 px-2.5 font-semibold border-b-2 transition-colors flex items-center gap-1 ${
-            filterTab === 'direct'
-              ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
-              : 'border-transparent text-zinc-400 hover:text-zinc-600'
-          }`}
-        >
-          <Users size={13} />
-          Direct DMs
+          <Hash size={11} strokeWidth={3} />
+          <span>+ Group</span>
         </button>
       </div>
 

@@ -9,9 +9,10 @@ import { Conversation, Story, UserProfile } from './types';
 import {
   subscribeToConversations,
   subscribeToStories,
-  getOrCreateDirectConversation
+  getOrCreateDirectConversation,
+  subscribeToAllUsers
 } from './services/chatService';
-import { INITIAL_PUBLIC_CHANNELS, INITIAL_STORIES } from './services/sampleData';
+import { INITIAL_PUBLIC_CHANNELS, INITIAL_STORIES, DEMO_USERS } from './services/sampleData';
 
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
@@ -24,6 +25,7 @@ import { AuthModal } from './components/AuthModal';
 import { AuthScreen } from './components/AuthScreen';
 import { SearchAccountsModal } from './components/SearchAccountsModal';
 import { TitleScreen } from './components/TitleScreen';
+import { CreateGroupChatModal } from './components/CreateGroupChatModal';
 
 const MessengerInner: React.FC = () => {
   const { profile, isAuthReady } = useAuth();
@@ -32,11 +34,13 @@ const MessengerInner: React.FC = () => {
   const [conversations, setConversations] = useState<Conversation[]>(INITIAL_PUBLIC_CHANNELS);
   const [activeConversationId, setActiveConversationId] = useState<string>('global-china-lounge');
   const [stories, setStories] = useState<Story[]>(INITIAL_STORIES);
+  const [allUsers, setAllUsers] = useState<UserProfile[]>(DEMO_USERS);
 
   // Modals state
   const [isStoryViewerOpen, setIsStoryViewerOpen] = useState(false);
   const [storyViewerIndex, setStoryViewerIndex] = useState(0);
   const [isCreateStoryOpen, setIsCreateStoryOpen] = useState(false);
+  const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
   const [isProfileDrawerOpen, setIsProfileDrawerOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
@@ -50,6 +54,15 @@ const MessengerInner: React.FC = () => {
     if (!profile) return;
     const unsubscribe = subscribeToConversations(profile.uid, (list) => {
       setConversations(list);
+    });
+    return () => unsubscribe();
+  }, [profile?.uid]);
+
+  // Real-time all users listener
+  useEffect(() => {
+    if (!profile) return;
+    const unsubscribe = subscribeToAllUsers(profile.uid, (users) => {
+      if (users.length > 0) setAllUsers(users);
     });
     return () => unsubscribe();
   }, [profile?.uid]);
@@ -135,6 +148,7 @@ const MessengerInner: React.FC = () => {
             onOpenAuthModal={() => setIsAuthModalOpen(true)}
             onStartDirectChat={handleStartDirectChat}
             onOpenSearchAccountsModal={() => setIsSearchAccountsOpen(true)}
+            onOpenCreateGroupModal={() => setIsCreateGroupOpen(true)}
           />
         </div>
 
@@ -153,6 +167,17 @@ const MessengerInner: React.FC = () => {
       </div>
 
       {/* Modals */}
+      <CreateGroupChatModal
+        isOpen={isCreateGroupOpen}
+        onClose={() => setIsCreateGroupOpen(false)}
+        registeredUsers={allUsers}
+        onGroupCreated={(newGroup) => {
+          setConversations((prev) => [newGroup, ...prev.filter((c) => c.id !== newGroup.id)]);
+          setActiveConversationId(newGroup.id);
+          setIsMobileChatOpen(true);
+        }}
+      />
+
       <SearchAccountsModal
         isOpen={isSearchAccountsOpen}
         onClose={() => setIsSearchAccountsOpen(false)}
