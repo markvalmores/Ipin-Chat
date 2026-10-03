@@ -149,26 +149,87 @@ export async function editMessage(
   }
 }
 
+// Delete a single message
+export async function deleteMessage(
+  conversationId: string,
+  messageId: string
+): Promise<void> {
+  try {
+    // 1. Remove from in-memory sample cache if present
+    if (INITIAL_CHANNEL_MESSAGES[conversationId]) {
+      INITIAL_CHANNEL_MESSAGES[conversationId] = INITIAL_CHANNEL_MESSAGES[conversationId].filter(
+        (m) => m.id !== messageId
+      );
+    }
+
+    // 2. Delete from Firestore
+    const msgRef = doc(db, 'conversations', conversationId, 'messages', messageId);
+    await deleteDoc(msgRef);
+  } catch (error) {
+    console.warn("Could not delete message from Firestore:", error);
+  }
+}
+
+// Delete multiple messages in batch
+export async function deleteMultipleMessages(
+  conversationId: string,
+  messageIds: string[]
+): Promise<void> {
+  if (!messageIds || messageIds.length === 0) return;
+
+  try {
+    // 1. Remove from in-memory sample cache
+    if (INITIAL_CHANNEL_MESSAGES[conversationId]) {
+      INITIAL_CHANNEL_MESSAGES[conversationId] = INITIAL_CHANNEL_MESSAGES[conversationId].filter(
+        (m) => !messageIds.includes(m.id)
+      );
+    }
+
+    // 2. Delete all in parallel from Firestore
+    await Promise.allSettled(
+      messageIds.map((id) =>
+        deleteDoc(doc(db, 'conversations', conversationId, 'messages', id))
+      )
+    );
+  } catch (error) {
+    console.warn("Could not delete multiple messages from Firestore:", error);
+  }
+}
+
 // React to a message
 export async function toggleMessageReaction(
   conversationId: string,
   messageId: string,
-  currentReactions: Record<string, string> | undefined,
-  userId: string,
-  emoji: string
-) {
-  const updatedReactions = { ...(currentReactions || {}) };
-  if (updatedReactions[userId] === emoji) {
-    delete updatedReactions[userId];
-  } else {
-    updatedReactions[userId] = emoji;
-  }
-
+  updatedReactions: Record<string, string>,
+  fallbackMessage?: Partial<Message>
+): Promise<Record<string, string>> {
   try {
+    // 1. Update in-memory initial channel messages so instant feedback persists locally
+    if (INITIAL_CHANNEL_MESSAGES[conversationId]) {
+      const found = INITIAL_CHANNEL_MESSAGES[conversationId].find((m) => m.id === messageId);
+      if (found) {
+        found.reactions = updatedReactions;
+      }
+    }
+
+    // 2. Persist to Firestore with setDoc merge: true so non-existent docs never throw errors
     const msgRef = doc(db, 'conversations', conversationId, 'messages', messageId);
-    await updateDoc(msgRef, {
-      reactions: updatedReactions
-    });
+    const dataToSet: Record<string, any> = {
+      id: messageId,
+      conversationId,
+      reactions: updatedReactions,
+      updatedAt: new Date().toISOString()
+    };
+    if (fallbackMessage) {
+      if (fallbackMessage.text) dataToSet.text = fallbackMessage.text;
+      if (fallbackMessage.senderId) dataToSet.senderId = fallbackMessage.senderId;
+      if (fallbackMessage.senderName) dataToSet.senderName = fallbackMessage.senderName;
+      if (fallbackMessage.createdAt) dataToSet.createdAt = fallbackMessage.createdAt;
+      if (fallbackMessage.mediaType) dataToSet.mediaType = fallbackMessage.mediaType;
+      if (fallbackMessage.mediaUrl) dataToSet.mediaUrl = fallbackMessage.mediaUrl;
+    }
+
+    await setDoc(msgRef, dataToSet, { merge: true });
   } catch (error) {
     console.warn("Could not update reaction in Firestore:", error);
   }
@@ -199,25 +260,35 @@ export function subscribeToMessages(
   const messagesRef = collection(db, 'conversations', conversationId, 'messages');
   const q = query(messagesRef, orderBy('createdAt', 'asc'));
 
+  const initialMsgs = INITIAL_CHANNEL_MESSAGES[conversationId] || [];
+
+  // Emit initial messages immediately for zero-latency load
+  if (initialMsgs.length > 0) {
+    onUpdate(initialMsgs);
+  }
+
   const unsubscribe = onSnapshot(q, (snapshot) => {
-    const msgs: Message[] = [];
+    const firestoreMsgs: Message[] = [];
     snapshot.forEach((docSnap) => {
-      msgs.push(docSnap.data() as Message);
+      firestoreMsgs.push(docSnap.data() as Message);
     });
 
-    // If Firestore has no messages yet for this initial channel, seed with rich initial samples
-    if (msgs.length === 0 && INITIAL_CHANNEL_MESSAGES[conversationId]) {
-      onUpdate(INITIAL_CHANNEL_MESSAGES[conversationId]);
-    } else {
-      onUpdate(msgs);
-    }
+    // Merge initial channel messages with Firestore messages by message ID
+    // This ensures group chat history is never cleared when someone sends a message or like!
+    const map = new Map<string, Message>();
+    initialMsgs.forEach((m) => map.set(m.id, { ...m }));
+    firestoreMsgs.forEach((m) => {
+      const existing = map.get(m.id);
+      map.set(m.id, { ...(existing || {}), ...m });
+    });
+
+    const combined = Array.from(map.values());
+    combined.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    onUpdate(combined);
   }, (error) => {
-    // Fallback to local sample messages if permission or offline
-    if (INITIAL_CHANNEL_MESSAGES[conversationId]) {
-      onUpdate(INITIAL_CHANNEL_MESSAGES[conversationId]);
-    } else {
-      onUpdate([]);
-    }
+    // Fallback to local sample messages if offline or permission
+    onUpdate(INITIAL_CHANNEL_MESSAGES[conversationId] || []);
   });
 
   return unsubscribe;

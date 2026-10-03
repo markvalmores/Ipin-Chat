@@ -75,6 +75,8 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
           <img
             src={mediaUrl}
             alt={fileName || 'Attachment preview'}
+            referrerPolicy="no-referrer"
+            crossOrigin="anonymous"
             className="max-w-full max-h-[80vh] object-contain rounded-2xl shadow-2xl"
           />
         )}

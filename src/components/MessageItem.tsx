@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Smile, Check, CheckCheck, Languages, Download, Play, FileText, Film, Volume2, Sparkles, Pencil, X } from 'lucide-react';
+import { Smile, Check, CheckCheck, Languages, Download, Play, FileText, Film, Volume2, Sparkles, Pencil, X, Trash2, CheckSquare } from 'lucide-react';
 import { Message, UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { toggleMessageReaction, editMessage } from '../services/chatService';
@@ -16,6 +16,11 @@ interface MessageItemProps {
   onPreviewMedia: (media: { url: string; type: string; name?: string; format?: string; size?: number }) => void;
   onSelectUserChat?: (user: UserProfile) => void;
   onOpenUserProfile?: (userId: string, userName?: string) => void;
+  onDeleteMessage?: (messageId: string) => void;
+  isSelectMode?: boolean;
+  isSelected?: boolean;
+  onToggleSelect?: (messageId: string) => void;
+  onEnterSelectMode?: (messageId: string) => void;
 }
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '😡', '🇨🇳', '🔥'];
@@ -27,11 +32,18 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   showSenderInfo,
   onPreviewMedia,
   onSelectUserChat,
-  onOpenUserProfile
+  onOpenUserProfile,
+  onDeleteMessage,
+  isSelectMode,
+  isSelected,
+  onToggleSelect,
+  onEnterSelectMode
 }) => {
   const { profile } = useAuth();
   const [showReactionBar, setShowReactionBar] = useState(false);
   const [showGifReactionPicker, setShowGifReactionPicker] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [localReactions, setLocalReactions] = useState<Record<string, string>>(message.reactions || {});
   const [showTranslation, setShowTranslation] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -87,8 +99,14 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       conversationId,
       message.id,
       current,
-      profile.uid,
-      reactionValue
+      {
+        text: message.text,
+        senderId: message.senderId,
+        senderName: message.senderName,
+        createdAt: message.createdAt,
+        mediaType: message.mediaType,
+        mediaUrl: message.mediaUrl
+      }
     );
   };
 
@@ -101,6 +119,17 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       setShowTranslation(true);
     } else {
       setShowTranslation(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (isDeleting) return;
+    setIsDeleting(true);
+    try {
+      await onDeleteMessage?.(message.id);
+    } finally {
+      setIsDeleting(false);
+      setShowDeleteConfirm(false);
     }
   };
 
@@ -133,6 +162,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   const isLegacyVideo = ['avi', 'flv', 'swf', 'wmv'].includes((message.fileFormat || '').toLowerCase());
   const isImage = message.mediaType === 'image' || ['png', 'gif', 'jpg', 'jpeg', 'bmp', 'apng', 'webp'].includes((message.fileFormat || '').toLowerCase());
   const isAudio = message.mediaType === 'audio';
+  const isBigLike = message.text === '👍' && !isImage && !isVideo && !isAudio;
 
   return (
     <div
@@ -158,6 +188,22 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       )}
 
       <div className="flex items-end gap-2 max-w-[85%] sm:max-w-[70%]">
+        {/* Multi-select Checkbox */}
+        {isSelectMode && isSelf && (
+          <button
+            type="button"
+            onClick={() => onToggleSelect?.(message.id)}
+            className={`w-5 h-5 rounded-md flex items-center justify-center shrink-0 mb-1 transition-all border ${
+              isSelected
+                ? 'bg-red-600 border-red-600 text-white shadow-xs'
+                : 'border-zinc-300 dark:border-zinc-600 hover:border-red-400 bg-white dark:bg-zinc-800'
+            }`}
+            title={isSelected ? 'Deselect message' : 'Select message to delete'}
+          >
+            {isSelected && <Check size={13} className="stroke-[3]" />}
+          </button>
+        )}
+
         {/* Recipient Avatar */}
         {!isSelf && (
           <div
@@ -212,10 +258,39 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             </div>
           )}
 
+          {/* Delete confirmation popover */}
+          {showDeleteConfirm && (
+            <div
+              className={`absolute -top-11 z-35 flex items-center gap-2 px-3 py-1.5 rounded-2xl bg-zinc-900 text-white shadow-2xl border border-zinc-700 animate-in zoom-in-95 duration-100 ${
+                isSelf ? 'right-0' : 'left-0'
+              }`}
+            >
+              <Trash2 size={13} className="text-red-400 shrink-0" />
+              <span className="text-[11px] font-semibold text-zinc-200 whitespace-nowrap">Delete message?</span>
+              <button
+                type="button"
+                onClick={handleDelete}
+                disabled={isDeleting}
+                className="px-2.5 py-0.5 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold text-[11px] transition-colors shadow-xs"
+              >
+                {isDeleting ? '...' : 'Delete'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowDeleteConfirm(false)}
+                className="px-2 py-0.5 rounded-lg bg-zinc-800 hover:bg-zinc-750 text-zinc-400 hover:text-white text-[11px] transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+
           {/* Main Bubble */}
           <div
             className={`relative rounded-3xl overflow-hidden shadow-xs transition-shadow ${
-              isSelf
+              isBigLike
+                ? 'bg-transparent text-zinc-900 dark:text-white shadow-none'
+                : isSelf
                 ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-br-xs'
                 : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 rounded-bl-xs border border-zinc-200/50 dark:border-zinc-700/50'
             }`}
@@ -237,9 +312,11 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 <img
                   src={message.mediaUrl}
                   alt={message.fileName || 'Photo'}
+                  referrerPolicy="no-referrer"
+                  crossOrigin="anonymous"
                   onError={(e) => {
                     (e.target as HTMLImageElement).src =
-                      'https://media.giphy.com/media/3oz8xAFtqoOUUrsh7W/giphy.gif';
+                      'https://i.giphy.com/media/3oz8xAFtqoOUUrsh7W/giphy.gif';
                   }}
                   className="max-h-72 w-auto object-cover rounded-2xl hover:opacity-95 transition-opacity"
                   loading="lazy"
@@ -311,7 +388,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
 
             {/* 5. TEXT CONTENT */}
             {message.text && (
-              <div className="px-4 py-2.5">
+              <div className={isBigLike ? 'p-1 select-none' : 'px-4 py-2.5'}>
                 {isEditing ? (
                   <div className="space-y-2 py-1 min-w-[220px] sm:min-w-[300px]">
                     <div className="flex items-center justify-between text-[11px] text-emerald-200">
@@ -353,6 +430,17 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                         {isSavingEdit ? 'Saving...' : 'Save & Fix'}
                       </button>
                     </div>
+                  </div>
+                ) : isBigLike ? (
+                  <div className="py-0.5">
+                    <span
+                      className="text-5xl inline-block hover:scale-125 active:scale-95 transition-transform duration-200 filter drop-shadow-md cursor-pointer animate-in zoom-in-75"
+                      role="img"
+                      aria-label="Like"
+                      title="Sent Like"
+                    >
+                      👍
+                    </span>
                   </div>
                 ) : (
                   <>
@@ -414,9 +502,11 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                     <img
                       src={reactionKey}
                       alt="GIF reaction"
+                      referrerPolicy="no-referrer"
+                      crossOrigin="anonymous"
                       onError={(e) => {
                         (e.target as HTMLImageElement).src =
-                          'https://media.giphy.com/media/3oz8xAFtqoOUUrsh7W/giphy.gif';
+                          'https://i.giphy.com/media/3oz8xAFtqoOUUrsh7W/giphy.gif';
                       }}
                       className="w-6 h-6 rounded-md object-cover inline-block"
                       loading="lazy"
@@ -493,6 +583,30 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               title="Translate & Pinyin"
             >
               <Languages size={14} />
+            </button>
+          )}
+
+          {/* Delete Message Trash Icon */}
+          {isSelf && onDeleteMessage && (
+            <button
+              type="button"
+              onClick={() => setShowDeleteConfirm(true)}
+              className="p-1.5 rounded-full hover:bg-red-50 dark:hover:bg-red-950/40 text-zinc-400 hover:text-red-500 transition-colors"
+              title="Delete message"
+            >
+              <Trash2 size={13} />
+            </button>
+          )}
+
+          {/* Multi-Select Messages Button */}
+          {isSelf && onEnterSelectMode && !isSelectMode && (
+            <button
+              type="button"
+              onClick={() => onEnterSelectMode(message.id)}
+              className="p-1.5 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-emerald-500 transition-colors"
+              title="Select multiple messages to delete"
+            >
+              <CheckSquare size={13} />
             </button>
           )}
         </div>

@@ -185,18 +185,18 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   // Sending
   const handleSend = async () => {
     if (isSending) return;
-    if (!text.trim() && !selectedFile) {
-      // Messenger thumbs up default
-      await onSendMessage({
-        text: '👍',
-        mediaType: 'none'
-      });
-      return;
-    }
-
     setIsSending(true);
 
     try {
+      if (!text.trim() && !selectedFile) {
+        // Messenger / WeChat thumbs up Like
+        await onSendMessage({
+          text: '👍',
+          mediaType: 'none'
+        });
+        return;
+      }
+
       let finalMessageText = text.trim();
 
       // Auto-translate if turned on
@@ -472,21 +472,22 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           </button>
         </div>
 
-        {/* Send Button or Thumbs Up */}
+        {/* Send Button or Thumbs Up Like */}
         <button
           type="button"
           onClick={handleSend}
-          className={`p-2.5 rounded-full transition-transform active:scale-95 ${
+          disabled={isSending}
+          className={`p-2.5 rounded-full transition-all active:scale-90 ${
             text.trim() || selectedFile
               ? 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white shadow-md'
-              : 'text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40'
+              : 'text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 hover:scale-110'
           }`}
-          title={text.trim() || selectedFile ? 'Send' : 'Thumbs Up'}
+          title={text.trim() || selectedFile ? 'Send Message' : 'Send Like 👍'}
         >
           {text.trim() || selectedFile ? (
             <Send size={18} />
           ) : (
-            <ThumbsUp size={20} />
+            <ThumbsUp size={22} className="transition-transform active:rotate-[-12deg]" />
           )}
         </button>
       </div>

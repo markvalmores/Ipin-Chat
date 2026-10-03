@@ -4,6 +4,7 @@ import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  signInAnonymously,
   signOut,
   sendPasswordResetEmail,
   updateProfile as updateFirebaseProfile
@@ -299,9 +300,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
-  const switchDemoUser = (demoUser: UserProfile) => {
+  const switchDemoUser = async (demoUser: UserProfile) => {
     setProfile(demoUser);
     setIsDemoMode(true);
+    if (!auth.currentUser) {
+      try {
+        await signInAnonymously(auth);
+      } catch (e) {
+        // Silently continue in local demo mode
+      }
+    }
   };
 
   const clearError = () => setLoginError(null);

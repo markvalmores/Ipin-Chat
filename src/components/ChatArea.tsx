@@ -11,7 +11,11 @@ import {
   Users,
   Sparkles,
   Hash,
-  Crown
+  Crown,
+  Trash2,
+  Check,
+  X,
+  CheckSquare
 } from 'lucide-react';
 import { Conversation, Message, UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -19,7 +23,9 @@ import {
   subscribeToMessages,
   sendMessage,
   markMessageRead,
-  subscribeToAllUsers
+  subscribeToAllUsers,
+  deleteMessage,
+  deleteMultipleMessages
 } from '../services/chatService';
 import { getConversationDisplay } from '../utils/conversationHelper';
 import { DEMO_USERS } from '../services/sampleData';
@@ -64,6 +70,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     format?: string;
     size?: number;
   } | null>(null);
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([]);
+  const [isDeletingBatch, setIsDeletingBatch] = useState(false);
+  const [showBatchDeleteConfirm, setShowBatchDeleteConfirm] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -179,6 +189,48 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       });
     }
     setIsProfileModalOpen(true);
+  };
+
+  const handleDeleteSingleMessage = async (messageId: string) => {
+    if (!conversation) return;
+    await deleteMessage(conversation.id, messageId);
+    setSelectedMessageIds((prev) => prev.filter((id) => id !== messageId));
+  };
+
+  const handleToggleSelectMessage = (messageId: string) => {
+    setSelectedMessageIds((prev) =>
+      prev.includes(messageId) ? prev.filter((id) => id !== messageId) : [...prev, messageId]
+    );
+  };
+
+  const handleEnterSelectMode = (initialMessageId?: string) => {
+    setIsSelectMode(true);
+    if (initialMessageId) {
+      setSelectedMessageIds([initialMessageId]);
+    }
+  };
+
+  const handleSelectAllMyMessages = () => {
+    if (!profile) return;
+    const myMsgIds = messages.filter((m) => m.senderId === profile.uid).map((m) => m.id);
+    setSelectedMessageIds(myMsgIds);
+  };
+
+  const handleCancelSelectMode = () => {
+    setIsSelectMode(false);
+    setSelectedMessageIds([]);
+    setShowBatchDeleteConfirm(false);
+  };
+
+  const handleExecuteBatchDelete = async () => {
+    if (!conversation || selectedMessageIds.length === 0 || isDeletingBatch) return;
+    setIsDeletingBatch(true);
+    try {
+      await deleteMultipleMessages(conversation.id, selectedMessageIds);
+      handleCancelSelectMode();
+    } finally {
+      setIsDeletingBatch(false);
+    }
   };
 
   return (
@@ -301,6 +353,27 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           >
             <Languages size={15} />
             <span className="hidden sm:inline text-[11px]">Translate</span>
+          </button>
+
+          {/* Select & Delete Messages Button */}
+          <button
+            type="button"
+            onClick={() => {
+              if (isSelectMode) {
+                handleCancelSelectMode();
+              } else {
+                handleEnterSelectMode();
+              }
+            }}
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
+              isSelectMode
+                ? 'bg-red-500 text-white border-red-600 shadow-sm'
+                : 'bg-emerald-50 dark:bg-emerald-950/50 hover:bg-red-50 dark:hover:bg-red-950/40 text-emerald-700 dark:text-emerald-300 hover:text-red-500 border-emerald-500/20 hover:border-red-400'
+            }`}
+            title={isSelectMode ? 'Cancel message selection' : 'Select messages to delete with trash icon'}
+          >
+            <Trash2 size={14} />
+            <span className="hidden sm:inline">{isSelectMode ? 'Cancel' : 'Delete'}</span>
           </button>
 
           {/* Voice Bridge with Enhanced Audio */}
@@ -436,12 +509,99 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               onPreviewMedia={(media) => setSelectedMedia(media)}
               onSelectUserChat={onSelectUserChat}
               onOpenUserProfile={handleOpenUserProfileFromId}
+              onDeleteMessage={handleDeleteSingleMessage}
+              isSelectMode={isSelectMode}
+              isSelected={selectedMessageIds.includes(msg.id)}
+              onToggleSelect={handleToggleSelectMessage}
+              onEnterSelectMode={handleEnterSelectMode}
             />
           );
         })}
 
         <div ref={messagesEndRef} />
       </div>
+
+      {/* Floating Multi-Select & Batch Delete Bar */}
+      {isSelectMode && (
+        <div className="mx-3 sm:mx-4 mb-2 p-2.5 sm:p-3 bg-zinc-900/95 backdrop-blur-md border border-zinc-700/80 rounded-2xl shadow-xl flex items-center justify-between gap-2 text-white animate-in slide-in-from-bottom-2 duration-150">
+          <div className="flex items-center gap-2">
+            <span className="w-6 h-6 rounded-full bg-red-500/20 text-red-400 flex items-center justify-center font-bold text-xs">
+              {selectedMessageIds.length}
+            </span>
+            <span className="text-xs font-semibold">
+              {selectedMessageIds.length === 1 ? '1 message selected' : `${selectedMessageIds.length} messages selected`}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            <button
+              type="button"
+              onClick={handleSelectAllMyMessages}
+              className="px-2.5 py-1 rounded-xl text-[11px] sm:text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors font-medium"
+            >
+              Select all mine
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowBatchDeleteConfirm(true)}
+              disabled={selectedMessageIds.length === 0 || isDeletingBatch}
+              className="px-3 py-1.5 rounded-xl text-[11px] sm:text-xs font-bold bg-red-600 hover:bg-red-700 disabled:opacity-40 text-white flex items-center gap-1.5 shadow-md transition-all active:scale-95"
+            >
+              <Trash2 size={13} />
+              <span>{isDeletingBatch ? 'Deleting...' : `Delete (${selectedMessageIds.length})`}</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleCancelSelectMode}
+              className="p-1 rounded-full text-zinc-400 hover:text-white transition-colors"
+              title="Cancel selection"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Batch Delete Confirmation Modal */}
+      {showBatchDeleteConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-150"
+          onClick={() => setShowBatchDeleteConfirm(false)}
+        >
+          <div
+            className="w-full max-w-sm bg-zinc-900 rounded-3xl p-5 border border-zinc-800 text-white shadow-2xl animate-in zoom-in-95 duration-150 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-red-500/20 text-red-500 flex items-center justify-center shrink-0">
+                <Trash2 size={20} />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold">Delete {selectedMessageIds.length} Messages?</h4>
+                <p className="text-xs text-zinc-400">These messages will be permanently removed for everyone.</p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowBatchDeleteConfirm(false)}
+                className="px-3.5 py-1.5 rounded-xl text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-semibold transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleExecuteBatchDelete}
+                disabled={isDeletingBatch}
+                className="px-4 py-1.5 rounded-xl text-xs bg-red-600 hover:bg-red-700 font-bold text-white shadow-md transition-colors"
+              >
+                {isDeletingBatch ? 'Deleting...' : 'Yes, Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 3. Input bar */}
       <MessageInput
