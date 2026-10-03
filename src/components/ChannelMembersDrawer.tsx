@@ -17,6 +17,7 @@ import { Conversation, UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { DEMO_USERS } from '../services/sampleData';
 import { addMembersToGroupChat } from '../services/chatService';
+import { AddGroupMembersModal } from './AddGroupMembersModal';
 
 interface ChannelMembersDrawerProps {
   conversation: Conversation;
@@ -37,6 +38,7 @@ export const ChannelMembersDrawer: React.FC<ChannelMembersDrawerProps> = ({
 }) => {
   const { profile, activePresences } = useAuth();
   const [copiedLink, setCopiedLink] = useState(false);
+  const [isAddPeopleOpen, setIsAddPeopleOpen] = useState(false);
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
 
@@ -84,7 +86,7 @@ export const ChannelMembersDrawer: React.FC<ChannelMembersDrawerProps> = ({
   const handleQuickAddMembers = async (count: number) => {
     setIsAdding(true);
     try {
-      await addMembersToGroupChat(conversation.id, [], count);
+      await addMembersToGroupChat(conversation.id, [], profile, count);
     } finally {
       setIsAdding(false);
       setShowAddMemberModal(false);
@@ -111,6 +113,18 @@ export const ChannelMembersDrawer: React.FC<ChannelMembersDrawerProps> = ({
           className="p-1.5 rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-400"
         >
           <X size={18} />
+        </button>
+      </div>
+
+      {/* Prominent Facebook Messenger style "Add People to Group" button */}
+      <div className="p-3 px-4 pb-1">
+        <button
+          type="button"
+          onClick={() => setIsAddPeopleOpen(true)}
+          className="w-full py-2.5 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-xs shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 transition-all active:scale-95"
+        >
+          <UserPlus size={16} />
+          <span>Add People to Group</span>
         </button>
       </div>
 
@@ -303,6 +317,14 @@ export const ChannelMembersDrawer: React.FC<ChannelMembersDrawerProps> = ({
           </div>
         )}
       </div>
+
+      {/* Add People to Group Modal */}
+      <AddGroupMembersModal
+        isOpen={isAddPeopleOpen}
+        onClose={() => setIsAddPeopleOpen(false)}
+        conversation={conversation}
+        registeredUsers={registeredUsers}
+      />
     </div>
   );
 };

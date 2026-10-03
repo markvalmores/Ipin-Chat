@@ -15,7 +15,8 @@ import {
   Trash2,
   Check,
   X,
-  CheckSquare
+  CheckSquare,
+  UserPlus
 } from 'lucide-react';
 import { Conversation, Message, UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -36,6 +37,7 @@ import { UserProfileModal } from './UserProfileModal';
 import { TranslatorModal } from './TranslatorModal';
 import { CallModal, CallType } from './CallModal';
 import { ChannelMembersDrawer } from './ChannelMembersDrawer';
+import { AddGroupMembersModal } from './AddGroupMembersModal';
 
 interface ChatAreaProps {
   conversation: Conversation | null;
@@ -57,6 +59,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isTranslatorModalOpen, setIsTranslatorModalOpen] = useState(false);
   const [isMembersDrawerOpen, setIsMembersDrawerOpen] = useState(false);
+  const [isAddMembersModalOpen, setIsAddMembersModalOpen] = useState(false);
   const [activeCall, setActiveCall] = useState<{
     isOpen: boolean;
     type: CallType;
@@ -341,6 +344,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <span className="font-mono text-xs hidden sm:inline">
                 {conversation.memberCount || conversation.participantIds.length || 2}
               </span>
+            </button>
+          )}
+
+          {/* Add Members to Group Button (Facebook Messenger Style) */}
+          {conversation.type === 'group' && (
+            <button
+              type="button"
+              onClick={() => setIsAddMembersModalOpen(true)}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 font-semibold text-xs border border-emerald-500/20 transition-all shadow-xs"
+              title="Add people to this group chat"
+            >
+              <UserPlus size={15} />
+              <span className="hidden sm:inline text-[11px]">Add</span>
             </button>
           )}
 
@@ -672,6 +688,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             setInspectedUser(u);
             setIsProfileModalOpen(true);
           }}
+          registeredUsers={allUsers}
+        />
+      )}
+
+      {/* 9. Facebook Messenger Style Add Group Members Modal */}
+      {conversation.type === 'group' && (
+        <AddGroupMembersModal
+          isOpen={isAddMembersModalOpen}
+          onClose={() => setIsAddMembersModalOpen(false)}
+          conversation={conversation}
           registeredUsers={allUsers}
         />
       )}

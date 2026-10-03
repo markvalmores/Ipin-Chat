@@ -468,33 +468,115 @@ export async function createGroupChat(
   return newGroup;
 }
 
-// Add members to an existing group chat (up to 1,000 members)
+// Add members to an existing group chat (like Facebook Messenger)
 export async function addMembersToGroupChat(
   conversationId: string,
-  newMemberIds: string[],
+  newMembersOrIds: (UserProfile | string)[],
+  addedBy?: UserProfile | null,
   addMemberCount: number = 0
 ): Promise<void> {
+  const newMemberProfiles: UserProfile[] = [];
+  const newMemberIds: string[] = [];
+
+  newMembersOrIds.forEach((item) => {
+    if (typeof item === 'string') {
+      newMemberIds.push(item);
+    } else if (item && item.uid) {
+      newMemberProfiles.push(item);
+      newMemberIds.push(item.uid);
+    }
+  });
+
+  const now = new Date().toISOString();
+
+  // 1. Update in-memory initial public channels if it is one of them
+  const initialChan = INITIAL_PUBLIC_CHANNELS.find((c) => c.id === conversationId);
+  if (initialChan) {
+    const merged = Array.from(new Set([...initialChan.participantIds, ...newMemberIds]));
+    initialChan.participantIds = merged;
+    initialChan.memberCount = Math.min(1000, Math.max(merged.length, (initialChan.memberCount || merged.length) + addMemberCount + (newMemberIds.length > 0 ? newMemberIds.length : 0)));
+    initialChan.updatedAt = now;
+  }
+
+  // 2. Update local custom group chats
   const localList = getLocalGroupChats();
   const found = localList.find((g) => g.id === conversationId);
   if (found) {
     const merged = Array.from(new Set([...found.participantIds, ...newMemberIds]));
     found.participantIds = merged;
-    found.memberCount = Math.min(
-      1000,
-      Math.max(merged.length, (found.memberCount || merged.length) + addMemberCount)
-    );
+    found.memberCount = Math.min(1000, Math.max(merged.length, (found.memberCount || merged.length) + addMemberCount + (newMemberIds.length > 0 ? newMemberIds.length : 0)));
+    found.updatedAt = now;
+    if (!found.participantData) found.participantData = {};
+    newMemberProfiles.forEach((u) => {
+      found.participantData![u.uid] = {
+        displayName: u.displayName,
+        photoURL: u.photoURL,
+        location: u.location
+      };
+    });
     saveLocalGroupChat(found);
-    window.dispatchEvent(new CustomEvent('ipin_group_updated'));
   }
 
+  // 3. Persist to Firestore
   try {
     const convRef = doc(db, 'conversations', conversationId);
-    await updateDoc(convRef, {
-      participantIds: arrayUnion(...newMemberIds)
+    const updates: Record<string, any> = {
+      updatedAt: now
+    };
+    if (newMemberIds.length > 0) {
+      updates.participantIds = arrayUnion(...newMemberIds);
+    }
+    newMemberProfiles.forEach((u) => {
+      updates[`participantData.${u.uid}`] = {
+        displayName: u.displayName,
+        photoURL: u.photoURL || '',
+        location: u.location || ''
+      };
     });
+
+    await setDoc(convRef, updates, { merge: true });
+
+    // 4. Send Facebook Messenger style system notification message to chat!
+    if (newMemberProfiles.length > 0 || newMemberIds.length > 0) {
+      const names = newMemberProfiles.length > 0
+        ? newMemberProfiles.map((m) => m.displayName).join(', ')
+        : `${newMemberIds.length} new member${newMemberIds.length > 1 ? 's' : ''}`;
+      const adderName = addedBy?.displayName || 'A member';
+      const systemText = `👋 ${adderName} added ${names} to the group.`;
+
+      const systemMsgId = `sys_add_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+      const systemMsg: Message = {
+        id: systemMsgId,
+        conversationId,
+        senderId: 'system-bot',
+        senderName: 'ipin Bot 🤖',
+        senderPhoto: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150',
+        text: systemText,
+        mediaType: 'none',
+        reactions: {},
+        readBy: addedBy ? [addedBy.uid] : [],
+        createdAt: now
+      };
+
+      const msgRef = doc(db, 'conversations', conversationId, 'messages', systemMsgId);
+      await setDoc(msgRef, systemMsg);
+
+      await setDoc(
+        convRef,
+        {
+          lastMessageText: systemText,
+          lastMessageSender: 'System',
+          lastMessageTime: now,
+          updatedAt: now
+        },
+        { merge: true }
+      );
+    }
   } catch (e) {
-    // Silent
+    console.warn('Could not update members in Firestore group:', e);
   }
+
+  window.dispatchEvent(new CustomEvent('ipin_group_updated', { detail: { conversationId, newMemberIds } }));
 }
 
 // Helper for local persistent 24-hour stories
