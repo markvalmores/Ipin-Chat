@@ -5,6 +5,7 @@ import {
   Crown,
   Shield,
   UserPlus,
+  UserMinus,
   Copy,
   Check,
   CheckCheck,
@@ -16,7 +17,7 @@ import {
 import { Conversation, UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { DEMO_USERS } from '../services/sampleData';
-import { addMembersToGroupChat } from '../services/chatService';
+import { addMembersToGroupChat, removeMemberFromGroupChat } from '../services/chatService';
 import { AddGroupMembersModal } from './AddGroupMembersModal';
 
 interface ChannelMembersDrawerProps {
@@ -41,6 +42,8 @@ export const ChannelMembersDrawer: React.FC<ChannelMembersDrawerProps> = ({
   const [isAddPeopleOpen, setIsAddPeopleOpen] = useState(false);
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
+  const [memberToRemove, setMemberToRemove] = useState<(UserProfile & { isSelfLeave?: boolean }) | null>(null);
+  const [isRemoving, setIsRemoving] = useState(false);
 
   if (!isOpen) return null;
 
@@ -90,6 +93,27 @@ export const ChannelMembersDrawer: React.FC<ChannelMembersDrawerProps> = ({
     } finally {
       setIsAdding(false);
       setShowAddMemberModal(false);
+    }
+  };
+
+  const handleConfirmRemove = async () => {
+    if (!memberToRemove || isRemoving) return;
+    setIsRemoving(true);
+    try {
+      await removeMemberFromGroupChat(
+        conversation.id,
+        memberToRemove.uid,
+        memberToRemove.displayName,
+        profile
+      );
+      if (memberToRemove.isSelfLeave) {
+        onClose();
+      }
+      setMemberToRemove(null);
+    } catch (err) {
+      console.error('Failed to remove member:', err);
+    } finally {
+      setIsRemoving(false);
     }
   };
 
@@ -184,19 +208,47 @@ export const ChannelMembersDrawer: React.FC<ChannelMembersDrawerProps> = ({
                     </div>
                   </div>
 
-                  {u.uid !== profile?.uid && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onSelectUserChat(u);
-                        onClose();
-                      }}
-                      className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-emerald-100 text-emerald-600 transition-opacity"
-                      title="Direct Message"
-                    >
-                      <MessageSquare size={13} />
-                    </button>
-                  )}
+                  <div className="flex items-center gap-1 shrink-0">
+                    {u.uid !== profile?.uid && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelectUserChat(u);
+                          onClose();
+                        }}
+                        className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 transition-all"
+                        title="Direct Message"
+                      >
+                        <MessageSquare size={13} />
+                      </button>
+                    )}
+
+                    {u.uid !== profile?.uid && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setMemberToRemove(u);
+                        }}
+                        className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/50 text-zinc-400 hover:text-red-500 transition-all"
+                        title={`Remove ${u.displayName} from group`}
+                      >
+                        <UserMinus size={13} />
+                      </button>
+                    )}
+
+                    {u.uid === profile?.uid && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setMemberToRemove({ ...u, isSelfLeave: true });
+                        }}
+                        className="opacity-0 group-hover:opacity-100 px-2 py-0.5 rounded-lg text-[10px] font-semibold text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/50 transition-all"
+                        title="Leave this group"
+                      >
+                        Leave
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -233,19 +285,47 @@ export const ChannelMembersDrawer: React.FC<ChannelMembersDrawerProps> = ({
                     </div>
                   </div>
 
-                  {u.uid !== profile?.uid && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onSelectUserChat(u);
-                        onClose();
-                      }}
-                      className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-emerald-100 text-emerald-600 transition-opacity"
-                      title="Direct Message"
-                    >
-                      <MessageSquare size={13} />
-                    </button>
-                  )}
+                  <div className="flex items-center gap-1 shrink-0">
+                    {u.uid !== profile?.uid && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelectUserChat(u);
+                          onClose();
+                        }}
+                        className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 transition-all"
+                        title="Direct Message"
+                      >
+                        <MessageSquare size={13} />
+                      </button>
+                    )}
+
+                    {u.uid !== profile?.uid && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setMemberToRemove(u);
+                        }}
+                        className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/50 text-zinc-400 hover:text-red-500 transition-all"
+                        title={`Remove ${u.displayName} from group`}
+                      >
+                        <UserMinus size={13} />
+                      </button>
+                    )}
+
+                    {u.uid === profile?.uid && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setMemberToRemove({ ...u, isSelfLeave: true });
+                        }}
+                        className="opacity-0 group-hover:opacity-100 px-2 py-0.5 rounded-lg text-[10px] font-semibold text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/50 transition-all"
+                        title="Leave this group"
+                      >
+                        Leave
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -279,6 +359,48 @@ export const ChannelMembersDrawer: React.FC<ChannelMembersDrawerProps> = ({
                       </span>
                       <span className="text-[10px] text-zinc-400 truncate block">{u.location || 'Offline'}</span>
                     </div>
+                  </div>
+
+                  <div className="flex items-center gap-1 shrink-0">
+                    {u.uid !== profile?.uid && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelectUserChat(u);
+                          onClose();
+                        }}
+                        className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 transition-all"
+                        title="Direct Message"
+                      >
+                        <MessageSquare size={13} />
+                      </button>
+                    )}
+
+                    {u.uid !== profile?.uid && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setMemberToRemove(u);
+                        }}
+                        className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/50 text-zinc-400 hover:text-red-500 transition-all"
+                        title={`Remove ${u.displayName} from group`}
+                      >
+                        <UserMinus size={13} />
+                      </button>
+                    )}
+
+                    {u.uid === profile?.uid && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setMemberToRemove({ ...u, isSelfLeave: true });
+                        }}
+                        className="opacity-0 group-hover:opacity-100 px-2 py-0.5 rounded-lg text-[10px] font-semibold text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/50 transition-all"
+                        title="Leave this group"
+                      >
+                        Leave
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
@@ -325,6 +447,53 @@ export const ChannelMembersDrawer: React.FC<ChannelMembersDrawerProps> = ({
         conversation={conversation}
         registeredUsers={registeredUsers}
       />
+
+      {/* Remove Member Confirmation Modal */}
+      {memberToRemove && (
+        <div
+          className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-150"
+          onClick={() => setMemberToRemove(null)}
+        >
+          <div
+            className="w-full max-w-sm bg-white dark:bg-zinc-900 rounded-3xl p-5 border border-zinc-200 dark:border-zinc-800 text-zinc-900 dark:text-white shadow-2xl animate-in zoom-in-95 duration-150 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-red-500/20 text-red-500 flex items-center justify-center shrink-0">
+                <UserMinus size={20} />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold">
+                  {memberToRemove.isSelfLeave ? 'Leave Group?' : `Remove ${memberToRemove.displayName}?`}
+                </h4>
+                <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5 leading-relaxed">
+                  {memberToRemove.isSelfLeave
+                    ? `You will no longer receive messages from "${conversation.title}".`
+                    : `${memberToRemove.displayName} will be removed from "${conversation.title}" and won't be able to chat here.`}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setMemberToRemove(null)}
+                className="px-3.5 py-1.5 rounded-xl text-xs bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 font-semibold transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmRemove}
+                disabled={isRemoving}
+                className="px-4 py-1.5 rounded-xl text-xs bg-red-600 hover:bg-red-700 disabled:opacity-50 font-bold text-white shadow-md transition-colors"
+              >
+                {isRemoving ? 'Removing...' : memberToRemove.isSelfLeave ? 'Leave Group' : 'Remove Member'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

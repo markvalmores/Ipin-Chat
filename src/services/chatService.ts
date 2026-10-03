@@ -12,6 +12,7 @@ import {
   updateDoc,
   deleteDoc,
   arrayUnion,
+  arrayRemove,
   serverTimestamp
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
@@ -577,6 +578,92 @@ export async function addMembersToGroupChat(
   }
 
   window.dispatchEvent(new CustomEvent('ipin_group_updated', { detail: { conversationId, newMemberIds } }));
+}
+
+// Remove a member from an existing group chat (like Facebook Messenger)
+export async function removeMemberFromGroupChat(
+  conversationId: string,
+  memberId: string,
+  memberName: string,
+  removedBy?: UserProfile | null
+): Promise<void> {
+  const now = new Date().toISOString();
+
+  // 1. Update in-memory initial public channels if it is one of them
+  const initialChan = INITIAL_PUBLIC_CHANNELS.find((c) => c.id === conversationId);
+  if (initialChan) {
+    initialChan.participantIds = initialChan.participantIds.filter((id) => id !== memberId);
+    initialChan.memberCount = Math.max(1, (initialChan.memberCount || 2) - 1);
+    initialChan.updatedAt = now;
+  }
+
+  // 2. Update local custom group chats
+  const localList = getLocalGroupChats();
+  const found = localList.find((g) => g.id === conversationId);
+  if (found) {
+    found.participantIds = found.participantIds.filter((id) => id !== memberId);
+    found.memberCount = Math.max(1, (found.memberCount || 2) - 1);
+    found.updatedAt = now;
+    if (found.participantData && found.participantData[memberId]) {
+      delete found.participantData[memberId];
+    }
+    saveLocalGroupChat(found);
+  }
+
+  // 3. Persist to Firestore
+  try {
+    const convRef = doc(db, 'conversations', conversationId);
+    await setDoc(
+      convRef,
+      {
+        participantIds: arrayRemove(memberId),
+        updatedAt: now
+      },
+      { merge: true }
+    );
+
+    // 4. Send Facebook Messenger style notification message to group chat
+    const isSelfLeaving = removedBy && removedBy.uid === memberId;
+    const systemText = isSelfLeaving
+      ? `👋 ${memberName} left the group.`
+      : `🚫 ${removedBy?.displayName || 'An admin'} removed ${memberName} from the group.`;
+
+    const systemMsgId = `sys_rem_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const systemMsg: Message = {
+      id: systemMsgId,
+      conversationId,
+      senderId: 'system-bot',
+      senderName: 'ipin Bot 🤖',
+      senderPhoto: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150',
+      text: systemText,
+      mediaType: 'none',
+      reactions: {},
+      readBy: removedBy ? [removedBy.uid] : [],
+      createdAt: now
+    };
+
+    const msgRef = doc(db, 'conversations', conversationId, 'messages', systemMsgId);
+    await setDoc(msgRef, systemMsg);
+
+    await setDoc(
+      convRef,
+      {
+        lastMessageText: systemText,
+        lastMessageSender: 'System',
+        lastMessageTime: now,
+        updatedAt: now
+      },
+      { merge: true }
+    );
+  } catch (e) {
+    console.warn('Could not remove member in Firestore group:', e);
+  }
+
+  window.dispatchEvent(
+    new CustomEvent('ipin_group_updated', {
+      detail: { conversationId, removedMemberId: memberId }
+    })
+  );
 }
 
 // Helper for local persistent 24-hour stories

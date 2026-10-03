@@ -13,7 +13,8 @@ import {
   Radio,
   ChevronLeft,
   Phone,
-  Video
+  Video,
+  UserMinus
 } from 'lucide-react';
 import { UserProfile } from '../types';
 import { BannerMedia } from './BannerMedia';
@@ -26,6 +27,8 @@ interface UserProfileModalProps {
   isOnline: boolean;
   onClose: () => void;
   onStartChat: (user: UserProfile) => void;
+  onRemoveFromGroup?: (user: UserProfile) => void;
+  groupTitle?: string;
 }
 
 export const UserProfileModal: React.FC<UserProfileModalProps> = ({
@@ -33,7 +36,9 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   isOpen,
   isOnline,
   onClose,
-  onStartChat
+  onStartChat,
+  onRemoveFromGroup,
+  groupTitle
 }) => {
   const [activeCallType, setActiveCallType] = useState<CallType | null>(null);
 
@@ -223,6 +228,21 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
               <span>Send Message to {user.displayName.split(' ')[0]}</span>
             </button>
           </div>
+
+          {/* Remove from Group Option */}
+          {onRemoveFromGroup && (
+            <button
+              type="button"
+              onClick={() => {
+                onRemoveFromGroup(user);
+                onClose();
+              }}
+              className="w-full mt-2 py-2 px-3 rounded-2xl bg-red-50 dark:bg-red-950/40 hover:bg-red-100 dark:hover:bg-red-900/60 text-red-600 dark:text-red-400 font-bold text-xs border border-red-500/20 flex items-center justify-center gap-1.5 transition-colors"
+            >
+              <UserMinus size={14} />
+              <span>Remove from {groupTitle || 'Group'}</span>
+            </button>
+          )}
         </div>
       </div>
 

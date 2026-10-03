@@ -26,7 +26,8 @@ import {
   markMessageRead,
   subscribeToAllUsers,
   deleteMessage,
-  deleteMultipleMessages
+  deleteMultipleMessages,
+  removeMemberFromGroupChat
 } from '../services/chatService';
 import { getConversationDisplay } from '../utils/conversationHelper';
 import { DEMO_USERS } from '../services/sampleData';
@@ -652,6 +653,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           onSelectUserChat?.(u);
           setIsProfileModalOpen(false);
         }}
+        onRemoveFromGroup={
+          conversation.type === 'group' && inspectedUser && inspectedUser.uid !== profile?.uid
+            ? async (u) => {
+                await removeMemberFromGroupChat(conversation.id, u.uid, u.displayName, profile);
+              }
+            : undefined
+        }
+        groupTitle={conversation.title}
       />
 
       {/* 6. Chinese ⇄ English Translator Modal */}
