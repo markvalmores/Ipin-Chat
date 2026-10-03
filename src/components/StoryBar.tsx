@@ -52,13 +52,31 @@ export const StoryBar: React.FC<StoryBarProps> = ({
             </button>
 
             {/* Avatar with add story badge */}
-            <div className="relative cursor-pointer group" onClick={onOpenCreateStory}>
-              <div className="w-13 h-13 rounded-full overflow-hidden ring-2 ring-emerald-500/30 group-hover:ring-emerald-500 transition-all">
-                <img
-                  src={profile?.photoURL || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'}
-                  alt={profile?.displayName}
-                  className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                />
+            <div
+              className="relative cursor-pointer group"
+              onClick={() => {
+                if (myStoryIndex !== -1) {
+                  onOpenStory(myStoryIndex);
+                } else {
+                  onOpenCreateStory();
+                }
+              }}
+              title={myStoryIndex !== -1 ? "View your 24h active story" : "Create a new story"}
+            >
+              <div
+                className={`w-13 h-13 rounded-full transition-all group-hover:scale-105 ${
+                  myStoryIndex !== -1
+                    ? 'bg-gradient-to-tr from-emerald-500 via-teal-400 to-emerald-300 p-[2.5px] shadow-sm'
+                    : 'ring-2 ring-emerald-500/30 group-hover:ring-emerald-500 p-0.5'
+                }`}
+              >
+                <div className="w-full h-full rounded-full overflow-hidden ring-2 ring-white dark:ring-zinc-900">
+                  <img
+                    src={profile?.photoURL || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'}
+                    alt={profile?.displayName}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
               </div>
 
               {/* Add Story (+) button on avatar bottom-right */}
@@ -69,13 +87,14 @@ export const StoryBar: React.FC<StoryBarProps> = ({
                   onOpenCreateStory();
                 }}
                 className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white flex items-center justify-center ring-2 ring-white dark:ring-zinc-900 shadow-sm"
+                title="Add new story"
               >
                 <Plus size={13} strokeWidth={3} />
               </button>
             </div>
           </div>
-          <span className="text-[11px] font-medium text-zinc-700 dark:text-zinc-300 truncate max-w-full">
-            Your Story
+          <span className="text-[11px] font-medium text-zinc-700 dark:text-zinc-300 truncate max-w-full text-center">
+            {myStoryIndex !== -1 ? 'Your Story 🟢' : 'Your Story'}
           </span>
         </div>
 

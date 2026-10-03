@@ -266,40 +266,104 @@ export function subscribeToConversations(
   return unsubscribe;
 }
 
-// Subscribe to active stories
+// Helper for local persistent 24-hour stories
+const LOCAL_STORIES_STORAGE_KEY = 'ipin_active_stories_v3';
+
+function getLocalActiveStories(): Story[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_STORIES_STORAGE_KEY);
+    if (!raw) return [];
+    const list = JSON.parse(raw) as Story[];
+    const now = Date.now();
+    return list.filter((s) => new Date(s.expiresAt).getTime() > now);
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveLocalActiveStory(story: Story) {
+  try {
+    const existing = getLocalActiveStories().filter((s) => s.id !== story.id);
+    existing.unshift(story);
+    localStorage.setItem(LOCAL_STORIES_STORAGE_KEY, JSON.stringify(existing));
+  } catch (e) {
+    // Silent
+  }
+}
+
+function removeLocalActiveStory(storyId: string) {
+  try {
+    const existing = getLocalActiveStories().filter((s) => s.id !== storyId);
+    localStorage.setItem(LOCAL_STORIES_STORAGE_KEY, JSON.stringify(existing));
+  } catch (e) {
+    // Silent
+  }
+}
+
+// Subscribe to active stories (strictly within 24-hour lifespan)
 export function subscribeToStories(
   onUpdate: (stories: Story[]) => void
 ) {
   const storiesRef = collection(db, 'stories');
 
+  const emitMergedStories = (firestoreStories: Story[] = []) => {
+    const now = Date.now();
+    const activeFirestore = firestoreStories.filter(
+      (s) => new Date(s.expiresAt).getTime() > now
+    );
+
+    const localStories = getLocalActiveStories();
+
+    // Map initial demo stories to be freshly within the last few hours
+    const freshDemoStories = INITIAL_STORIES.map((s, idx) => ({
+      ...s,
+      createdAt: new Date(now - 1000 * 60 * 60 * (idx * 2 + 1)).toISOString(),
+      expiresAt: new Date(now + 1000 * 60 * 60 * (24 - (idx * 2 + 1))).toISOString()
+    }));
+
+    // Merge: Firestore first, then local cache, then demo stories
+    const mergedMap = new Map<string, Story>();
+
+    freshDemoStories.forEach((s) => mergedMap.set(s.id, s));
+    localStories.forEach((s) => mergedMap.set(s.id, s));
+    activeFirestore.forEach((s) => mergedMap.set(s.id, s));
+
+    const finalStories = Array.from(mergedMap.values());
+    finalStories.sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+
+    onUpdate(finalStories);
+  };
+
+  // Immediate emit from local cache & demo
+  emitMergedStories([]);
+
   const unsubscribe = onSnapshot(storiesRef, (snapshot) => {
     const list: Story[] = [];
     snapshot.forEach((docSnap) => {
       const data = docSnap.data() as Story;
-      // Check 24 hour expiry
-      if (new Date(data.expiresAt).getTime() > Date.now()) {
-        list.push(data);
-      }
+      list.push(data);
     });
-
-    // Combine with initial sample stories
-    const combined = [...list];
-    INITIAL_STORIES.forEach(sample => {
-      if (!combined.some(s => s.id === sample.id)) {
-        combined.push(sample);
-      }
-    });
-
-    combined.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    onUpdate(combined);
+    emitMergedStories(list);
   }, (error) => {
-    onUpdate(INITIAL_STORIES);
+    console.warn("Could not subscribe to Firestore stories:", error);
+    emitMergedStories([]);
   });
 
-  return unsubscribe;
+  // Re-check periodically or on custom event
+  const handleStoryUpdate = () => {
+    emitMergedStories([]);
+  };
+  window.addEventListener('ipin_story_updated', handleStoryUpdate);
+
+  return () => {
+    unsubscribe();
+    window.removeEventListener('ipin_story_updated', handleStoryUpdate);
+  };
 }
 
-// Create a new story
+// Create a new story active for exactly 24 hours
 export async function createStory(
   user: UserProfile,
   storyData: {
@@ -309,9 +373,9 @@ export async function createStory(
     bgColor?: string;
   }
 ): Promise<string> {
-  const storyId = `story-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+  const storyId = `story-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   const now = new Date();
-  const expires = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24 hours
+  const expires = new Date(now.getTime() + 24 * 60 * 60 * 1000); // Exactly 24 hours
 
   const newStory: Story = {
     id: storyId,
@@ -327,17 +391,48 @@ export async function createStory(
     expiresAt: expires.toISOString(),
   };
 
+  // 1. Immediately store in local 24h cache for instant availability
+  saveLocalActiveStory(newStory);
+  window.dispatchEvent(new CustomEvent('ipin_story_updated'));
+
+  // 2. Persist to Firestore
   try {
     const storyRef = doc(db, 'stories', storyId);
     await setDoc(storyRef, newStory);
   } catch (error) {
     console.warn("Could not write story to Firestore:", error);
   }
+
   return storyId;
+}
+
+// Delete an active story
+export async function deleteStory(storyId: string): Promise<void> {
+  removeLocalActiveStory(storyId);
+  window.dispatchEvent(new CustomEvent('ipin_story_updated'));
+
+  try {
+    const storyRef = doc(db, 'stories', storyId);
+    await deleteDoc(storyRef);
+  } catch (error) {
+    console.warn("Could not delete story from Firestore:", error);
+  }
 }
 
 // Mark story as viewed
 export async function markStoryViewed(storyId: string, userId: string) {
+  // Update in local cache
+  try {
+    const local = getLocalActiveStories();
+    const found = local.find((s) => s.id === storyId);
+    if (found && !found.viewers.includes(userId)) {
+      found.viewers.push(userId);
+      localStorage.setItem(LOCAL_STORIES_STORAGE_KEY, JSON.stringify(local));
+    }
+  } catch (e) {
+    // Silent
+  }
+
   try {
     const storyRef = doc(db, 'stories', storyId);
     await updateDoc(storyRef, {

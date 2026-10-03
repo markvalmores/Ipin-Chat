@@ -1,7 +1,8 @@
 import React, { useState, useRef } from 'react';
-import { X, Image as ImageIcon, Video, Type, Upload, Sparkles } from 'lucide-react';
+import { X, Image as ImageIcon, Video, Type, Upload, Sparkles, Clock, Check } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { createStory } from '../services/chatService';
+import { compressImageForUpload, storeMediaBlob } from '../utils/mediaStore';
 
 interface CreateStoryModalProps {
   isOpen: boolean;
@@ -18,6 +19,13 @@ const BG_GRADIENTS = [
   'linear-gradient(135deg, #18181b 0%, #064e3b 100%)'
 ];
 
+const PRESET_STORY_IMAGES = [
+  { label: '🏮 Lanterns', url: 'https://images.unsplash.com/photo-1508804185872-d7badad00f7d?w=800&auto=format&fit=crop&q=80' },
+  { label: '🏙️ Shanghai', url: 'https://images.unsplash.com/photo-1548013146-72479768bada?w=800&auto=format&fit=crop&q=80' },
+  { label: '🍵 West Lake Tea', url: 'https://images.unsplash.com/photo-1576092768241-dec231879fc3?w=800&auto=format&fit=crop&q=80' },
+  { label: '🐼 Giant Panda', url: 'https://images.unsplash.com/photo-1564349683136-77e08dba1ef7?w=800&auto=format&fit=crop&q=80' }
+];
+
 export const CreateStoryModal: React.FC<CreateStoryModalProps> = ({
   isOpen,
   onClose,
@@ -25,24 +33,37 @@ export const CreateStoryModal: React.FC<CreateStoryModalProps> = ({
 }) => {
   const { profile } = useAuth();
   const [activeTab, setActiveTab] = useState<'image' | 'video' | 'text'>('image');
-  const [mediaUrl, setMediaUrl] = useState('');
+  const [mediaUrl, setMediaUrl] = useState(PRESET_STORY_IMAGES[0].url);
   const [text, setText] = useState('');
   const [selectedBg, setSelectedBg] = useState(BG_GRADIENTS[0]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isCompressing, setIsCompressing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen || !profile) return null;
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const result = event.target?.result as string;
-      setMediaUrl(result);
-    };
-    reader.readAsDataURL(file);
+    if (activeTab === 'image' || file.type.startsWith('image/')) {
+      setIsCompressing(true);
+      try {
+        const compressedBase64 = await compressImageForUpload(file);
+        setMediaUrl(compressedBase64);
+        setActiveTab('image');
+      } catch (err) {
+        const reader = new FileReader();
+        reader.onload = (event) => setMediaUrl(event.target?.result as string);
+        reader.readAsDataURL(file);
+      } finally {
+        setIsCompressing(false);
+      }
+    } else {
+      const objUrl = URL.createObjectURL(file);
+      setMediaUrl(objUrl);
+      setActiveTab('video');
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -180,17 +201,43 @@ export const CreateStoryModal: React.FC<CreateStoryModalProps> = ({
 
           {/* Media URL / Upload Options */}
           {activeTab !== 'text' && (
-            <div className="space-y-2">
+            <div className="space-y-3">
               <div className="flex gap-2">
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  className="flex-1 py-2.5 px-4 rounded-xl border border-dashed border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center justify-center gap-2 hover:bg-emerald-100/50"
+                  disabled={isCompressing}
+                  className="flex-1 py-2.5 px-4 rounded-xl border border-dashed border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center justify-center gap-2 hover:bg-emerald-100/50 transition-colors"
                 >
                   <Upload size={14} />
-                  Choose File from Device
+                  <span>{isCompressing ? 'Compressing for 24h story...' : 'Upload from Device (Image / Video)'}</span>
                 </button>
               </div>
+
+              {activeTab === 'image' && (
+                <div>
+                  <label className="block text-xs font-medium text-zinc-500 mb-1.5">
+                    Or pick a China landmark / culture preset:
+                  </label>
+                  <div className="flex gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+                    {PRESET_STORY_IMAGES.map((preset) => (
+                      <button
+                        key={preset.label}
+                        type="button"
+                        onClick={() => setMediaUrl(preset.url)}
+                        className={`px-2.5 py-1 rounded-xl text-[11px] font-semibold transition-all shrink-0 ${
+                          mediaUrl === preset.url
+                            ? 'bg-emerald-600 text-white shadow-xs'
+                            : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700'
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div>
                 <input
                   type="url"
@@ -239,6 +286,14 @@ export const CreateStoryModal: React.FC<CreateStoryModalProps> = ({
             />
           </div>
 
+          {/* 24-Hour Lifespan Guarantee Note */}
+          <div className="p-3 rounded-2xl bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-500/30 flex items-center gap-2.5 text-xs text-emerald-800 dark:text-emerald-300">
+            <Clock size={16} className="shrink-0 text-emerald-600 dark:text-emerald-400" />
+            <span className="font-medium">
+              This story will stay active and visible for exactly <strong>24 hours</strong> before safely expiring.
+            </span>
+          </div>
+
           {/* Action buttons */}
           <div className="flex gap-2 pt-2">
             <button
@@ -253,7 +308,7 @@ export const CreateStoryModal: React.FC<CreateStoryModalProps> = ({
               disabled={isSubmitting || (activeTab !== 'text' && !mediaUrl) || (activeTab === 'text' && !text.trim())}
               className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-sm font-semibold shadow-md disabled:opacity-50 transition-all"
             >
-              {isSubmitting ? 'Posting...' : 'Share to Story'}
+              {isSubmitting ? 'Posting...' : 'Share to Story (24h Active)'}
             </button>
           </div>
         </form>

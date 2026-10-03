@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, ChevronLeft, ChevronRight, Send, Heart, Flame, Sparkles, Smile } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, Send, Heart, Flame, Sparkles, Smile, Clock, Trash2, Eye } from 'lucide-react';
 import { Story, UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { markStoryViewed, sendMessage, getOrCreateDirectConversation } from '../services/chatService';
+import { markStoryViewed, sendMessage, getOrCreateDirectConversation, deleteStory } from '../services/chatService';
 
 interface StoryViewerModalProps {
   isOpen: boolean;
@@ -10,6 +10,15 @@ interface StoryViewerModalProps {
   stories: Story[];
   initialIndex?: number;
   onSelectConversation?: (convId: string) => void;
+}
+
+function getRemainingTimeStr(expiresAt: string): string {
+  const diffMs = new Date(expiresAt).getTime() - Date.now();
+  if (diffMs <= 0) return 'Expired';
+  const hours = Math.floor(diffMs / (1000 * 60 * 60));
+  const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+  if (hours > 0) return `${hours}h ${mins}m left`;
+  return `${mins}m left`;
 }
 
 export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
@@ -78,6 +87,16 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
     if (currentIndex > 0) {
       setCurrentIndex((prev) => prev - 1);
       setProgress(0);
+    }
+  };
+
+  const handleDeleteMyStory = async () => {
+    if (!currentStory) return;
+    await deleteStory(currentStory.id);
+    if (stories.length <= 1) {
+      onClose();
+    } else {
+      handleNext();
     }
   };
 
@@ -178,14 +197,31 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
               </div>
               <div>
                 <p className="text-sm font-semibold leading-tight drop-shadow-sm">{currentStory.userName}</p>
-                <p className="text-[11px] text-zinc-300">
-                  {new Date(currentStory.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </p>
+                <div className="flex items-center gap-1.5 text-[11px] text-zinc-300">
+                  <span>{new Date(currentStory.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                  <span>•</span>
+                  <span className="flex items-center gap-1 text-emerald-300 font-mono font-medium">
+                    <Clock size={11} />
+                    {getRemainingTimeStr(currentStory.expiresAt)}
+                  </span>
+                </div>
               </div>
             </div>
 
-            <div className="text-xs bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 px-2 py-0.5 rounded-full font-medium">
-              ipin Story
+            <div className="flex items-center gap-1.5">
+              {profile && profile.uid === currentStory.userId && (
+                <button
+                  type="button"
+                  onClick={handleDeleteMyStory}
+                  className="p-1.5 rounded-full bg-red-600/80 hover:bg-red-700 text-white backdrop-blur-md transition-colors"
+                  title="Delete this story"
+                >
+                  <Trash2 size={14} />
+                </button>
+              )}
+              <div className="text-xs bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 px-2.5 py-0.5 rounded-full font-medium flex items-center gap-1">
+                <span>24h Story</span>
+              </div>
             </div>
           </div>
         </div>
@@ -254,6 +290,17 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
 
         {/* Quick Reactions & Reply Bar */}
         <div className="p-3 bg-gradient-to-t from-black/95 via-black/80 to-transparent z-20 space-y-2">
+          {/* Story Viewers Count */}
+          <div className="flex items-center justify-between text-[11px] text-zinc-300 px-2 pb-0.5">
+            <div className="flex items-center gap-1.5 text-emerald-400 font-medium">
+              <Eye size={13} />
+              <span>{currentStory.viewers?.length || 0} viewed</span>
+            </div>
+            <span className="text-[10px] text-zinc-400 font-mono">
+              Active for 24 hours
+            </span>
+          </div>
+
           {/* Reaction emojis row */}
           <div className="flex items-center justify-around px-2 text-xl">
             {['❤️', '🔥', '🍵', '👏', '😮', '😂'].map((emoji) => (
