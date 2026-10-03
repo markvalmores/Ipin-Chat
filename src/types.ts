@@ -47,6 +47,10 @@ export interface Conversation {
   admins?: string[];
   memberCount?: number;
   inviteCode?: string;
+  wallpaperURL?: string;
+  wallpaperType?: 'image' | 'gif' | 'youtube' | 'video';
+  wallpaperOpacity?: number;
+  wallpaperBlur?: number;
 }
 
 export type MediaType = 'image' | 'video' | 'audio' | 'file' | 'none';

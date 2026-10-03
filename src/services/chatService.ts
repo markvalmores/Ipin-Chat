@@ -727,6 +727,95 @@ export async function getGroupChatByIdOrInvite(idOrInvite: string): Promise<Conv
   return null;
 }
 
+// Background chat wallpaper configuration
+export interface ChatWallpaperSettings {
+  wallpaperURL?: string;
+  wallpaperType?: 'image' | 'gif' | 'youtube' | 'video';
+  wallpaperOpacity?: number; // 0.1 to 1.0 (default 0.85)
+  wallpaperBlur?: number; // 0, 1, 2, 4
+}
+
+export function getConversationWallpaper(
+  conversationId: string,
+  initialConversation?: Conversation | null
+): ChatWallpaperSettings | null {
+  try {
+    const raw = localStorage.getItem(`ipin_wallpaper_${conversationId}`);
+    if (raw) {
+      return JSON.parse(raw);
+    }
+  } catch (e) {
+    // Ignore
+  }
+
+  if (initialConversation?.wallpaperURL) {
+    return {
+      wallpaperURL: initialConversation.wallpaperURL,
+      wallpaperType: initialConversation.wallpaperType || 'image',
+      wallpaperOpacity: initialConversation.wallpaperOpacity ?? 0.85,
+      wallpaperBlur: initialConversation.wallpaperBlur ?? 0
+    };
+  }
+
+  return null;
+}
+
+export async function updateConversationWallpaper(
+  conversationId: string,
+  settings: ChatWallpaperSettings | null
+): Promise<void> {
+  const key = `ipin_wallpaper_${conversationId}`;
+  if (!settings || !settings.wallpaperURL) {
+    localStorage.removeItem(key);
+  } else {
+    localStorage.setItem(key, JSON.stringify(settings));
+  }
+
+  // Update initial channels
+  const inPublic = INITIAL_PUBLIC_CHANNELS.find((c) => c.id === conversationId);
+  if (inPublic) {
+    inPublic.wallpaperURL = settings?.wallpaperURL;
+    inPublic.wallpaperType = settings?.wallpaperType;
+    inPublic.wallpaperOpacity = settings?.wallpaperOpacity;
+    inPublic.wallpaperBlur = settings?.wallpaperBlur;
+  }
+
+  // Update local custom group chats
+  const localList = getLocalGroupChats();
+  const found = localList.find((c) => c.id === conversationId);
+  if (found) {
+    found.wallpaperURL = settings?.wallpaperURL;
+    found.wallpaperType = settings?.wallpaperType;
+    found.wallpaperOpacity = settings?.wallpaperOpacity;
+    found.wallpaperBlur = settings?.wallpaperBlur;
+    saveLocalGroupChat(found);
+  }
+
+  // Persist to Firestore
+  try {
+    const convRef = doc(db, 'conversations', conversationId);
+    await setDoc(
+      convRef,
+      {
+        wallpaperURL: settings?.wallpaperURL || '',
+        wallpaperType: settings?.wallpaperType || 'image',
+        wallpaperOpacity: settings?.wallpaperOpacity ?? 0.85,
+        wallpaperBlur: settings?.wallpaperBlur ?? 0,
+        updatedAt: new Date().toISOString()
+      },
+      { merge: true }
+    );
+  } catch (err) {
+    console.warn('Could not update wallpaper in Firestore:', err);
+  }
+
+  window.dispatchEvent(
+    new CustomEvent('ipin_wallpaper_updated', {
+      detail: { conversationId, settings }
+    })
+  );
+}
+
 // Helper for local persistent 24-hour stories
 const LOCAL_STORIES_STORAGE_KEY = 'ipin_active_stories_v3';
 

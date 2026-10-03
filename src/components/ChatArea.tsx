@@ -17,7 +17,8 @@ import {
   X,
   CheckSquare,
   UserPlus,
-  LogOut
+  LogOut,
+  Image as ImageIcon
 } from 'lucide-react';
 import { Conversation, Message, UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -28,7 +29,9 @@ import {
   subscribeToAllUsers,
   deleteMessage,
   deleteMultipleMessages,
-  removeMemberFromGroupChat
+  removeMemberFromGroupChat,
+  getConversationWallpaper,
+  ChatWallpaperSettings
 } from '../services/chatService';
 import { getConversationDisplay } from '../utils/conversationHelper';
 import { DEMO_USERS } from '../services/sampleData';
@@ -40,6 +43,8 @@ import { TranslatorModal } from './TranslatorModal';
 import { CallModal, CallType } from './CallModal';
 import { ChannelMembersDrawer } from './ChannelMembersDrawer';
 import { AddGroupMembersModal } from './AddGroupMembersModal';
+import { ChatWallpaperView } from './ChatWallpaperView';
+import { ChatWallpaperModal } from './ChatWallpaperModal';
 
 interface ChatAreaProps {
   conversation: Conversation | null;
