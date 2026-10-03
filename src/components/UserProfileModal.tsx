@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   X,
   MessageSquare,
@@ -11,11 +11,14 @@ import {
   Tv,
   Globe,
   Radio,
-  ChevronLeft
+  ChevronLeft,
+  Phone,
+  Video
 } from 'lucide-react';
 import { UserProfile } from '../types';
 import { BannerMedia } from './BannerMedia';
 import { isYouTubeUrl } from '../utils/youtube';
+import { CallModal, CallType } from './CallModal';
 
 interface UserProfileModalProps {
   user: UserProfile | null;
@@ -32,6 +35,8 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   onClose,
   onStartChat
 }) => {
+  const [activeCallType, setActiveCallType] = useState<CallType | null>(null);
+
   if (!isOpen || !user) return null;
 
   const isYouTubeBanner = isYouTubeUrl(user.bannerURL) || user.bannerType === 'youtube';
@@ -176,8 +181,28 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
             </div>
           </div>
 
+          {/* Quick Voice / Video Call Action Row */}
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setActiveCallType('voice')}
+              className="py-2.5 px-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 font-semibold text-xs border border-emerald-500/20 flex items-center justify-center gap-1.5 transition-colors"
+            >
+              <Phone size={14} />
+              <span>Voice Call (Enhanced)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveCallType('video')}
+              className="py-2.5 px-3 rounded-2xl bg-teal-50 dark:bg-teal-950/40 hover:bg-teal-100 dark:hover:bg-teal-900/60 text-teal-700 dark:text-teal-300 font-semibold text-xs border border-teal-500/20 flex items-center justify-center gap-1.5 transition-colors"
+            >
+              <Video size={14} />
+              <span>Video Call (Filters)</span>
+            </button>
+          </div>
+
           {/* Action Buttons: Back to Chat & Send Message */}
-          <div className="mt-6 pt-2 flex items-center gap-2">
+          <div className="mt-3 pt-1 flex items-center gap-2">
             <button
               type="button"
               onClick={onClose}
@@ -200,6 +225,16 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
           </div>
         </div>
       </div>
+
+      {/* In-Profile Voice & Video Call Modal */}
+      {activeCallType && (
+        <CallModal
+          isOpen={true}
+          callType={activeCallType}
+          recipient={user}
+          onEndCall={() => setActiveCallType(null)}
+        />
+      )}
     </div>
   );
 };

@@ -309,13 +309,20 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             {message.text && (
               <div className="px-4 py-2.5">
                 {isEditing ? (
-                  <div className="space-y-2 py-1 min-w-[200px] sm:min-w-[260px]">
+                  <div className="space-y-2 py-1 min-w-[220px] sm:min-w-[300px]">
+                    <div className="flex items-center justify-between text-[11px] text-emerald-200">
+                      <span className="font-semibold flex items-center gap-1">
+                        <Pencil size={11} />
+                        Fix broken sentence or typo
+                      </span>
+                    </div>
                     <textarea
                       value={editText}
                       onChange={(e) => setEditText(e.target.value)}
-                      className="w-full p-2 text-xs rounded-xl bg-black/30 text-white border border-white/40 focus:outline-none focus:ring-1 focus:ring-emerald-400 resize-none"
+                      className="w-full p-2.5 text-xs rounded-xl bg-black/40 text-white border border-white/40 focus:outline-none focus:ring-2 focus:ring-emerald-400 resize-none placeholder-zinc-300"
                       rows={2}
                       autoFocus
+                      placeholder="Type your corrected sentence..."
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' && !e.shiftKey) {
                           e.preventDefault();
@@ -329,7 +336,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                       <button
                         type="button"
                         onClick={() => setIsEditing(false)}
-                        className="px-2.5 py-1 text-[11px] rounded-lg bg-white/20 hover:bg-white/30 text-white font-medium"
+                        className="px-2.5 py-1 text-[11px] rounded-lg bg-white/20 hover:bg-white/30 text-white font-medium transition-colors"
                       >
                         Cancel
                       </button>
@@ -337,9 +344,9 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                         type="button"
                         onClick={handleSaveEdit}
                         disabled={isSavingEdit || !editText.trim()}
-                        className="px-3 py-1 text-[11px] rounded-lg bg-emerald-400 hover:bg-emerald-300 text-zinc-950 font-bold disabled:opacity-50"
+                        className="px-3.5 py-1 text-[11px] rounded-lg bg-emerald-400 hover:bg-emerald-300 text-zinc-950 font-bold disabled:opacity-50 transition-colors shadow-xs"
                       >
-                        {isSavingEdit ? 'Saving...' : 'Save'}
+                        {isSavingEdit ? 'Saving...' : 'Save & Fix'}
                       </button>
                     </div>
                   </div>
@@ -377,56 +384,81 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             )}
           </div>
 
-          {/* Reactions Tallies below bubble */}
-          {Object.keys(reactionCounts).length > 0 && (
-            <div
-              className={`flex items-center gap-1 mt-1 flex-wrap ${
-                isSelf ? 'justify-end' : 'justify-start'
-              }`}
-            >
-              {Object.entries(reactionCounts).map(([reactionKey, data]) => {
-                const hasMyReaction = profile && data.users.includes(profile.uid);
-                const isGifReaction = reactionKey.startsWith('http') || reactionKey.startsWith('data:');
+          {/* Reactions Tallies and Direct Action Buttons below bubble */}
+          <div
+            className={`flex items-center gap-1.5 mt-1.5 flex-wrap ${
+              isSelf ? 'justify-end' : 'justify-start'
+            }`}
+          >
+            {Object.entries(reactionCounts).map(([reactionKey, data]) => {
+              const hasMyReaction = profile && data.users.includes(profile.uid);
+              const isGifReaction = reactionKey.startsWith('http') || reactionKey.startsWith('data:');
 
-                return (
-                  <button
-                    key={reactionKey}
-                    type="button"
-                    onClick={() => handleReactionClick(reactionKey)}
-                    className={`px-2 py-0.5 rounded-full text-xs flex items-center gap-1 shadow-xs border transition-all active:scale-95 ${
-                      hasMyReaction
-                        ? 'bg-emerald-100 dark:bg-emerald-950/80 border-emerald-500 text-emerald-700 dark:text-emerald-300 font-semibold ring-1 ring-emerald-500/30'
-                        : 'bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:border-emerald-400'
-                    }`}
-                    title={hasMyReaction ? 'Click to remove reaction' : 'Click to add reaction'}
-                  >
-                    {isGifReaction ? (
-                      <img
-                        src={reactionKey}
-                        alt="GIF reaction"
-                        className="w-5 h-5 rounded-md object-cover inline-block"
-                        loading="lazy"
-                      />
-                    ) : (
-                      <span>{reactionKey}</span>
-                    )}
-                    <span className="text-[10px] font-bold">{data.count}</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
+              return (
+                <button
+                  key={reactionKey}
+                  type="button"
+                  onClick={() => handleReactionClick(reactionKey)}
+                  className={`px-2 py-0.5 rounded-full text-xs flex items-center gap-1 shadow-xs border transition-all active:scale-95 ${
+                    hasMyReaction
+                      ? 'bg-emerald-100 dark:bg-emerald-950/80 border-emerald-500 text-emerald-700 dark:text-emerald-300 font-semibold ring-1 ring-emerald-500/30'
+                      : 'bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:border-emerald-400'
+                  }`}
+                  title={hasMyReaction ? 'Click to remove reaction' : 'Click to add reaction'}
+                >
+                  {isGifReaction ? (
+                    <img
+                      src={reactionKey}
+                      alt="GIF reaction"
+                      className="w-5 h-5 rounded-md object-cover inline-block"
+                      loading="lazy"
+                    />
+                  ) : (
+                    <span>{reactionKey}</span>
+                  )}
+                  <span className="text-[10px] font-bold">{data.count}</span>
+                </button>
+              );
+            })}
+
+            {/* Direct "+ React" Button */}
+            <button
+              type="button"
+              onClick={() => setShowReactionBar(!showReactionBar)}
+              className="px-2 py-0.5 rounded-full text-xs flex items-center gap-1 bg-white/80 dark:bg-zinc-800/80 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 border border-zinc-200 dark:border-zinc-700 hover:border-emerald-400 text-zinc-600 dark:text-zinc-400 hover:text-emerald-600 dark:hover:text-emerald-300 transition-all shadow-xs"
+              title="React to this message"
+            >
+              <Smile size={12} className="text-amber-500" />
+              <span className="text-[10px] font-medium">React</span>
+            </button>
+
+            {/* Direct "Edit sentence" button for sender's own text messages */}
+            {isSelf && message.text && !isEditing && (
+              <button
+                type="button"
+                onClick={() => {
+                  setIsEditing(true);
+                  setEditText(message.text || '');
+                }}
+                className="px-2 py-0.5 rounded-full text-xs flex items-center gap-1 bg-white/80 dark:bg-zinc-800/80 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 border border-zinc-200 dark:border-zinc-700 hover:border-emerald-400 text-zinc-600 dark:text-zinc-400 hover:text-emerald-600 dark:hover:text-emerald-300 transition-all shadow-xs"
+                title="Edit and fix broken sentence"
+              >
+                <Pencil size={11} className="text-emerald-500" />
+                <span className="text-[10px] font-medium">Edit sentence</span>
+              </button>
+            )}
+          </div>
         </div>
 
-        {/* Hover Action Buttons: React, Edit, Translate */}
-        <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 mb-1">
+        {/* Message Quick Action Row (React, Edit, Translate) */}
+        <div className="opacity-80 hover:opacity-100 transition-opacity flex items-center gap-1 mb-1">
           <button
             type="button"
             onClick={() => setShowReactionBar(!showReactionBar)}
-            className="p-1.5 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
-            title="React"
+            className="p-1.5 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500 hover:text-amber-500 transition-colors"
+            title="React with emoji or GIF"
           >
-            <Smile size={15} />
+            <Smile size={14} />
           </button>
 
           {isSelf && message.text && (
@@ -436,10 +468,10 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 setIsEditing(true);
                 setEditText(message.text || '');
               }}
-              className="p-1.5 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-emerald-500 transition-colors"
-              title="Edit sentence (fix typo or mistake)"
+              className="p-1.5 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500 hover:text-emerald-500 transition-colors"
+              title="Edit sentence (fix typos or broken sentence)"
             >
-              <Pencil size={14} />
+              <Pencil size={13} />
             </button>
           )}
 
@@ -448,11 +480,11 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               type="button"
               onClick={handleToggleTranslation}
               className={`p-1.5 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors ${
-                showTranslation ? 'text-emerald-600 dark:text-emerald-400' : 'text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200'
+                showTranslation ? 'text-emerald-600 dark:text-emerald-400' : 'text-zinc-500 hover:text-teal-500'
               }`}
               title="Translate & Pinyin"
             >
-              <Languages size={15} />
+              <Languages size={14} />
             </button>
           )}
         </div>

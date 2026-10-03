@@ -26,6 +26,7 @@ import { MessageInput } from './MessageInput';
 import { MediaPreviewModal } from './MediaPreviewModal';
 import { UserProfileModal } from './UserProfileModal';
 import { TranslatorModal } from './TranslatorModal';
+import { CallModal, CallType } from './CallModal';
 
 interface ChatAreaProps {
   conversation: Conversation | null;
@@ -46,6 +47,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [inspectedUser, setInspectedUser] = useState<UserProfile | null>(null);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isTranslatorModalOpen, setIsTranslatorModalOpen] = useState(false);
+  const [activeCall, setActiveCall] = useState<{
+    isOpen: boolean;
+    type: CallType;
+    recipient: UserProfile;
+  } | null>(null);
   const [insertedText, setInsertedText] = useState<string | null>(null);
   const [selectedMedia, setSelectedMedia] = useState<{
     url: string;
@@ -256,17 +262,46 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             <span className="hidden sm:inline text-[11px]">Translate</span>
           </button>
 
+          {/* Voice Bridge with Enhanced Audio */}
           <button
             type="button"
-            className="p-2 rounded-full hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors"
-            title="Start voice bridge"
+            onClick={() => {
+              const recipientUser = otherUser || {
+                uid: 'global-channel',
+                displayName: displayInfo.title,
+                photoURL: displayInfo.avatar,
+                email: 'chat@ipin.chat'
+              };
+              setActiveCall({
+                isOpen: true,
+                type: 'voice',
+                recipient: recipientUser
+              });
+            }}
+            className="p-2 rounded-full hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 transition-colors"
+            title="Start HD Voice Call with Enhanced Audio"
           >
             <Phone size={18} />
           </button>
+
+          {/* Video Bridge with Real-Time Video Filters & Enhanced Audio */}
           <button
             type="button"
-            className="p-2 rounded-full hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors"
-            title="Start video bridge"
+            onClick={() => {
+              const recipientUser = otherUser || {
+                uid: 'global-channel',
+                displayName: displayInfo.title,
+                photoURL: displayInfo.avatar,
+                email: 'chat@ipin.chat'
+              };
+              setActiveCall({
+                isOpen: true,
+                type: 'video',
+                recipient: recipientUser
+              });
+            }}
+            className="p-2 rounded-full hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 transition-colors"
+            title="Start HD Video Call with Real-Time Video Filters"
           >
             <Video size={18} />
           </button>
@@ -378,6 +413,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           setIsTranslatorModalOpen(false);
         }}
       />
+
+      {/* 7. Voice & Video Call Modal with Real-Time Filters & Enhanced Audio */}
+      {activeCall && (
+        <CallModal
+          isOpen={activeCall.isOpen}
+          callType={activeCall.type}
+          recipient={activeCall.recipient}
+          onEndCall={() => setActiveCall(null)}
+        />
+      )}
     </div>
   );
 };
