@@ -86,7 +86,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     await toggleMessageReaction(
       conversationId,
       message.id,
-      localReactions,
+      current,
       profile.uid,
       reactionValue
     );
@@ -237,6 +237,10 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 <img
                   src={message.mediaUrl}
                   alt={message.fileName || 'Photo'}
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).src =
+                      'https://media.giphy.com/media/3oz8xAFtqoOUUrsh7W/giphy.gif';
+                  }}
                   className="max-h-72 w-auto object-cover rounded-2xl hover:opacity-95 transition-opacity"
                   loading="lazy"
                 />
@@ -410,7 +414,11 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                     <img
                       src={reactionKey}
                       alt="GIF reaction"
-                      className="w-5 h-5 rounded-md object-cover inline-block"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src =
+                          'https://media.giphy.com/media/3oz8xAFtqoOUUrsh7W/giphy.gif';
+                      }}
+                      className="w-6 h-6 rounded-md object-cover inline-block"
                       loading="lazy"
                     />
                   ) : (
@@ -509,7 +517,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       <GifPickerModal
         isOpen={showGifReactionPicker}
         onClose={() => setShowGifReactionPicker(false)}
-        onSelectGif={(gif) => handleReactionClick(gif.previewUrl || gif.url)}
+        onSelectGif={(gif) => handleReactionClick(gif.url)}
         title="React with Tenor GIF"
       />
     </div>

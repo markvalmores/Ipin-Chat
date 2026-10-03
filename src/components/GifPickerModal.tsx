@@ -12,9 +12,12 @@ interface GifPickerModalProps {
 const CATEGORIES = [
   { label: '🔥 Trending', query: 'trending' },
   { label: '❤️ Love & Heart', query: 'heart' },
-  { label: '😂 Funny', query: 'funny' },
-  { label: '🎉 Cheers', query: 'cheers' },
-  { label: '🇨🇳 China & Panda', query: 'china' }
+  { label: '😂 Funny & Memes', query: 'funny' },
+  { label: '🎉 Cheers & Party', query: 'cheers' },
+  { label: '🇨🇳 China & Panda', query: 'china' },
+  { label: '🐱 Cats & Pets', query: 'cat' },
+  { label: '😱 Shock & Mindblown', query: 'shock' },
+  { label: '🍵 Tea & Vibe', query: 'tea' }
 ];
 
 export const GifPickerModal: React.FC<GifPickerModalProps> = ({
@@ -47,6 +50,8 @@ export const GifPickerModal: React.FC<GifPickerModalProps> = ({
   }, [isOpen, searchQuery, activeCategory]);
 
   if (!isOpen) return null;
+
+  const isCustomUrl = searchQuery.trim().startsWith('http');
 
   return (
     <div
@@ -81,7 +86,7 @@ export const GifPickerModal: React.FC<GifPickerModalProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search Tenor GIFs (love, funny, cat, cheers)..."
+              placeholder="Search Tenor GIFs or paste any GIF URL..."
               className="w-full bg-transparent text-xs text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none"
               autoFocus
             />
@@ -109,7 +114,7 @@ export const GifPickerModal: React.FC<GifPickerModalProps> = ({
               }}
               className={`px-2.5 py-1 rounded-xl text-[11px] font-semibold shrink-0 transition-colors ${
                 activeCategory === cat.query && !searchQuery
-                  ? 'bg-emerald-600 text-white'
+                  ? 'bg-emerald-600 text-white shadow-xs'
                   : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700'
               }`}
             >
@@ -142,6 +147,10 @@ export const GifPickerModal: React.FC<GifPickerModalProps> = ({
                 <img
                   src={gif.previewUrl || gif.url}
                   alt={gif.title}
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).src =
+                      'https://media.giphy.com/media/3oz8xAFtqoOUUrsh7W/giphy.gif';
+                  }}
                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
                   loading="lazy"
                 />
