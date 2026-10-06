@@ -588,7 +588,7 @@ export const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
             <button
               type="button"
               onClick={async () => {
-                await signInWithGoogle('mdv4244@gmail.com');
+                await signInWithGoogle();
                 onClose();
               }}
               className="w-full py-2.5 rounded-2xl bg-white hover:bg-zinc-100 dark:bg-zinc-800 dark:hover:bg-zinc-750 text-zinc-900 dark:text-zinc-100 border border-zinc-200 dark:border-zinc-700 font-bold text-xs shadow-xs transition-all flex items-center justify-center gap-2.5 cursor-pointer"

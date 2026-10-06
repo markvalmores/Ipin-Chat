@@ -11,12 +11,11 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({ onProceed }) => {
   const [isPressing, setIsPressing] = useState(false);
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
-  const [lastEmail, setLastEmail] = useState<string | null>(null);
 
   useEffect(() => {
+    // Clear any stale last login email from browser storage on title screen
     try {
-      const saved = localStorage.getItem('ipin_last_login_email');
-      if (saved) setLastEmail(saved);
+      localStorage.removeItem('ipin_last_login_email');
     } catch (e) {}
 
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -181,12 +180,6 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({ onProceed }) => {
               <span>Create Account</span>
             </button>
           </div>
-
-          {lastEmail && (
-            <p className="text-[11px] text-zinc-400">
-              Previously logged in as: <span className="text-emerald-400 font-semibold">{lastEmail}</span>
-            </p>
-          )}
         </div>
 
         {/* Cross-border badges */}

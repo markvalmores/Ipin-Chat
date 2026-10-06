@@ -55,6 +55,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   // Initialize Auth listener and restore active session
   useEffect(() => {
+    // Purge any legacy stored email credentials from local storage
+    try {
+      localStorage.removeItem('ipin_last_login_email');
+    } catch (e) {}
+
     let active = true;
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -303,15 +308,18 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       localStorage.setItem('ipin_last_login_email', googleUser.email || '');
       localStorage.removeItem('ipin_active_demo_user');
     } catch (err: any) {
-      console.warn('Google Sign-In notice (attempting seamless sign-in fallback):', err?.message || err);
-      // If popup was blocked by browser/iframe or closed or restricted, gracefully log in with Google profile
-      const targetEmail = fallbackEmail || 'mdv4244@gmail.com';
-      await signInWithGoogleQuick(targetEmail, targetEmail.split('@')[0]);
+      console.warn('Google Sign-In notice:', err?.message || err);
+      // If user supplied a specific fallback email, proceed with it; otherwise display informative message
+      if (fallbackEmail) {
+        await signInWithGoogleQuick(fallbackEmail, fallbackEmail.split('@')[0]);
+      } else {
+        setLoginError('Google Sign-In was cancelled or popup was blocked by browser. You can sign in using your account email or select a demo user below.');
+      }
     }
   };
 
   // Fast direct Google login (guaranteed to work across all iframe & popup-restricted environments)
-  const signInWithGoogleQuick = async (emailStr = 'mdv4244@gmail.com', nameStr?: string) => {
+  const signInWithGoogleQuick = async (emailStr = 'guest@ipin.chat', nameStr?: string) => {
     setLoginError(null);
     const cleanEmail = emailStr.trim().toLowerCase();
     const cleanName = nameStr || cleanEmail.split('@')[0] || 'Google User';
