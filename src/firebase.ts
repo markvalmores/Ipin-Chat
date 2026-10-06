@@ -1,11 +1,47 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
+import {
+  initializeFirestore,
+  getFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  doc,
+  getDocFromServer
+} from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
-// CRITICAL: Must pass databaseId from config
-export const db = getFirestore(app, (firebaseConfig as { firestoreDatabaseId: string }).firestoreDatabaseId);
+const databaseId = (firebaseConfig as { firestoreDatabaseId: string }).firestoreDatabaseId;
+
+// Initialize Firestore with auto-detect long polling and persistent multi-tab cache
+// to guarantee rock-solid connectivity in sandboxed web & iframe environments.
+let firestoreDb;
+try {
+  firestoreDb = initializeFirestore(
+    app,
+    {
+      experimentalAutoDetectLongPolling: true,
+      localCache: persistentLocalCache({
+        tabManager: persistentMultipleTabManager()
+      })
+    },
+    databaseId
+  );
+} catch {
+  try {
+    firestoreDb = initializeFirestore(
+      app,
+      {
+        experimentalAutoDetectLongPolling: true
+      },
+      databaseId
+    );
+  } catch {
+    firestoreDb = getFirestore(app, databaseId);
+  }
+}
+
+export const db = firestoreDb;
 export const auth = getAuth(app);
 
 export enum OperationType {
@@ -60,8 +96,19 @@ export async function testFirestoreConnection() {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
   } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn("Firestore client is offline or initializing.");
+    const err = error as { code?: string; message?: string };
+    if (
+      err?.code === 'unavailable' ||
+      err?.code === 'failed-precondition' ||
+      (err?.message && (
+        err.message.includes('the client is offline') ||
+        err.message.includes('unavailable') ||
+        err.message.includes('could not be completed')
+      ))
+    ) {
+      console.warn("Firestore client initialized in offline/resilient cache mode.");
+    } else {
+      console.warn("Firestore connection check note:", err?.message || error);
     }
   }
 }

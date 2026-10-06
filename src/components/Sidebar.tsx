@@ -11,7 +11,9 @@ import {
   Circle,
   UserPlus,
   Hash,
-  Link
+  Link,
+  KeyRound,
+  LogIn
 } from 'lucide-react';
 import { Conversation, Story, UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -51,7 +53,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenCreateGroupModal,
   onOpenJoinGroupModal
 }) => {
-  const { profile, user, activeCount, activePresences } = useAuth();
+  const { profile, user, activeCount, activePresences, isDemoMode } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
   const [filterTab, setFilterTab] = useState<'all' | 'bridges' | 'direct'>('all');
   const [showNewChatDropdown, setShowNewChatDropdown] = useState(false);
@@ -163,6 +165,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <MessageSquarePlus size={19} />
           </button>
 
+          {/* Quick Log In Button in Header */}
+          <button
+            type="button"
+            onClick={onOpenAuthModal}
+            className="p-2 rounded-full hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 transition-colors"
+            title="Log In / Switch Account"
+          >
+            <LogIn size={19} />
+          </button>
+
           {/* New Chat Dropdown */}
           {showNewChatDropdown && (
             <div className="absolute top-12 right-0 z-40 w-68 bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl border border-zinc-200 dark:border-zinc-800 p-2 animate-in zoom-in-95 duration-150">
@@ -215,8 +227,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   </button>
                 ))}
               </div>
+
+              <div className="pt-2 mt-2 border-t border-zinc-100 dark:border-zinc-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowNewChatDropdown(false);
+                    onOpenAuthModal();
+                  }}
+                  className="w-full p-2 rounded-xl flex items-center gap-2 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 font-semibold text-xs transition-colors cursor-pointer"
+                >
+                  <KeyRound size={15} />
+                  <span>Log In / Switch Account</span>
+                </button>
+              </div>
             </div>
           )}
+
+          {/* Log In / Switch Account Quick Button */}
+          <button
+            type="button"
+            onClick={onOpenAuthModal}
+            className="p-1.5 px-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400 font-semibold text-xs transition-colors flex items-center gap-1 cursor-pointer"
+            title="Log in to account / Switch account"
+          >
+            <LogIn size={15} />
+            <span className="text-[11px] font-bold">Log In</span>
+          </button>
 
           {/* User Avatar with Profile trigger */}
           <button
@@ -307,6 +344,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <span>+ Group</span>
         </button>
       </div>
+
+      {/* 5. Demo Persona Banner if not in permanent account */}
+      {isDemoMode && (
+        <div className="mx-3.5 mb-2 p-2.5 rounded-2xl bg-gradient-to-r from-emerald-500/10 via-teal-500/10 to-emerald-500/10 border border-emerald-500/30 flex items-center justify-between gap-2 text-xs animate-in fade-in">
+          <div className="min-w-0">
+            <p className="font-bold text-emerald-800 dark:text-emerald-300 text-[11px] truncate">
+              👤 Viewing as Demo ({profile?.displayName?.split(' ')[0]})
+            </p>
+            <p className="text-[10px] text-zinc-500 dark:text-zinc-400 truncate">
+              Log in with Google or Email anytime
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onOpenAuthModal}
+            className="px-2.5 py-1 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[10px] shadow-xs shrink-0 cursor-pointer"
+          >
+            Log In
+          </button>
+        </div>
+      )}
 
       {/* 5. Conversations & Search Results List */}
       <div className="flex-1 overflow-y-auto divide-y divide-zinc-50 dark:divide-zinc-900">
@@ -458,6 +516,42 @@ export const Sidebar: React.FC<SidebarProps> = ({
             );
           })
         )}
+      </div>
+
+      {/* 5. Persistent User Account Footer Bar & Login Option */}
+      <div className="p-3 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50/95 dark:bg-zinc-900/95 backdrop-blur-md flex items-center justify-between gap-2 shrink-0">
+        <div
+          onClick={onOpenProfileDrawer}
+          className="flex items-center gap-2.5 min-w-0 cursor-pointer group flex-1"
+          title="Click to view & edit your profile"
+        >
+          <div className="relative shrink-0">
+            <img
+              src={profile?.photoURL || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'}
+              alt={profile?.displayName}
+              className="w-9 h-9 rounded-2xl object-cover ring-2 ring-emerald-500/30 group-hover:ring-emerald-500 transition-all"
+            />
+            <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-zinc-900" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-bold text-zinc-900 dark:text-zinc-100 truncate group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
+              {profile?.displayName || 'User'}
+            </p>
+            <p className="text-[10px] text-zinc-500 dark:text-zinc-400 truncate">
+              {profile?.email || profile?.location || 'Connected to ipin Bridge'}
+            </p>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={onOpenAuthModal}
+          className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer shrink-0"
+          title="Log In / Switch Account"
+        >
+          <LogIn size={13} />
+          <span>Log In</span>
+        </button>
       </div>
     </div>
   );

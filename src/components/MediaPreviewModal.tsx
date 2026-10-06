@@ -9,7 +9,8 @@ import {
   Volume2,
   VolumeX,
   Maximize,
-  RotateCcw
+  RotateCcw,
+  Check
 } from 'lucide-react';
 import { getMediaBlobUrl, downloadMediaFile } from '../utils/mediaStore';
 
@@ -43,6 +44,7 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
   const [duration, setDuration] = useState(0);
   const [showControls, setShowControls] = useState(true);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadSuccess, setDownloadSuccess] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const controlsTimeoutRef = useRef<number | null>(null);
@@ -70,13 +72,20 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
     if (!targetSource || isDownloading) return;
 
     setIsDownloading(true);
+    setDownloadSuccess(false);
     try {
-      await downloadMediaFile({
+      const ok = await downloadMediaFile({
         urlOrKey: targetSource,
+        mediaUrl: mediaUrl,
+        rawKey: mediaUrl ? mediaUrl.replace(/^local_media:/, '') : undefined,
         fileName,
         fileFormat,
         fileSize
       });
+      if (ok) {
+        setDownloadSuccess(true);
+        setTimeout(() => setDownloadSuccess(false), 3000);
+      }
     } catch (err) {
       console.error('Download error:', err);
     } finally {
@@ -266,15 +275,27 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
               type="button"
               onClick={handleDownload}
               disabled={isDownloading}
-              className="px-3 py-1.5 sm:py-2 rounded-full bg-emerald-600/90 hover:bg-emerald-500 active:scale-95 text-white transition-all flex items-center gap-1.5 text-xs font-semibold cursor-pointer shadow-md disabled:opacity-50"
+              className={`px-3 py-1.5 sm:py-2 rounded-full transition-all flex items-center gap-1.5 text-xs font-semibold cursor-pointer shadow-md disabled:opacity-50 ${
+                downloadSuccess
+                  ? 'bg-emerald-500 text-white'
+                  : 'bg-emerald-600/90 hover:bg-emerald-500 active:scale-95 text-white'
+              }`}
               title="Download exact video file"
             >
               {isDownloading ? (
                 <Loader2 size={16} className="animate-spin text-white" />
+              ) : downloadSuccess ? (
+                <Check size={16} className="text-white" />
               ) : (
                 <Download size={16} />
               )}
-              <span>{isDownloading ? 'Saving...' : 'Download'}</span>
+              <span>
+                {isDownloading
+                  ? 'Saving...'
+                  : downloadSuccess
+                  ? 'Downloaded!'
+                  : 'Download'}
+              </span>
             </button>
           )}
           <button
@@ -466,6 +487,8 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
                       >
                         {isDownloading ? (
                           <Loader2 size={16} className="animate-spin text-emerald-400" />
+                        ) : downloadSuccess ? (
+                          <Check size={16} className="text-emerald-400" />
                         ) : (
                           <Download size={16} />
                         )}

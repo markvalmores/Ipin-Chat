@@ -32,6 +32,7 @@ const MessengerInner: React.FC = () => {
   const { profile, isAuthReady } = useAuth();
 
   const [hasProceeded, setHasProceeded] = useState(false);
+  const [authScreenInitialTab, setAuthScreenInitialTab] = useState<'signin' | 'signup'>('signin');
   const [conversations, setConversations] = useState<Conversation[]>(INITIAL_PUBLIC_CHANNELS);
   const [activeConversationId, setActiveConversationId] = useState<string>('global-china-lounge');
   const [stories, setStories] = useState<Story[]>(INITIAL_STORIES);
@@ -94,7 +95,14 @@ const MessengerInner: React.FC = () => {
 
   // 1. Title Screen: "Welcome to ipin Chat please press O to proceed"
   if (!hasProceeded) {
-    return <TitleScreen onProceed={() => setHasProceeded(true)} />;
+    return (
+      <TitleScreen
+        onProceed={(tab) => {
+          setAuthScreenInitialTab(tab || 'signin');
+          setHasProceeded(true);
+        }}
+      />
+    );
   }
 
   // 2. Loading state
@@ -109,9 +117,14 @@ const MessengerInner: React.FC = () => {
     );
   }
 
-  // 3. Account creation first requirement: cannot proceed to chat without an account
+  // 3. Account creation or sign in requirement: cannot proceed to chat without an account
   if (!profile) {
-    return <AuthScreen />;
+    return (
+      <AuthScreen
+        initialTab={authScreenInitialTab}
+        onBackToTitle={() => setHasProceeded(false)}
+      />
+    );
   }
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId) || conversations[0] || null;
@@ -143,7 +156,7 @@ const MessengerInner: React.FC = () => {
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-zinc-100 dark:bg-zinc-950 font-sans text-zinc-900 dark:text-zinc-100 selection:bg-emerald-500 selection:text-white">
       {/* Top Cross-Border Bridge Protocol Indicator */}
-      <GlobalBridgeBanner />
+      <GlobalBridgeBanner onOpenAuthModal={() => setIsAuthModalOpen(true)} />
 
       {/* Main Messenger Layout: Sidebar + Active Chat */}
       <div className="flex-1 flex overflow-hidden relative">
@@ -183,6 +196,7 @@ const MessengerInner: React.FC = () => {
             conversation={activeConversation}
             onBackToSidebar={() => setIsMobileChatOpen(false)}
             onSelectUserChat={handleStartDirectChat}
+            onOpenAuthModal={() => setIsAuthModalOpen(true)}
             onLeaveGroup={(leftConvId) => {
               const remaining = conversations.filter((c) => c.id !== leftConvId);
               const fallback =

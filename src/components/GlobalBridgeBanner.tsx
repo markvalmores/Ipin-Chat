@@ -1,7 +1,11 @@
 import React, { useState } from 'react';
-import { ShieldCheck, Globe, Wifi, Info, X } from 'lucide-react';
+import { ShieldCheck, Globe, Wifi, Info, X, LogIn } from 'lucide-react';
 
-export const GlobalBridgeBanner: React.FC = () => {
+interface GlobalBridgeBannerProps {
+  onOpenAuthModal?: () => void;
+}
+
+export const GlobalBridgeBanner: React.FC<GlobalBridgeBannerProps> = ({ onOpenAuthModal }) => {
   const [isDismissed, setIsDismissed] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
 
@@ -37,6 +41,19 @@ export const GlobalBridgeBanner: React.FC = () => {
           <Wifi size={12} />
           Encrypted WebSockets
         </span>
+
+        {onOpenAuthModal && (
+          <button
+            type="button"
+            onClick={onOpenAuthModal}
+            className="px-2 py-0.5 rounded-lg bg-emerald-700/60 hover:bg-emerald-600 text-white text-[11px] font-bold flex items-center gap-1 transition-colors cursor-pointer border border-emerald-500/30"
+            title="Log in to account / Switch account"
+          >
+            <LogIn size={11} />
+            <span>Log In</span>
+          </button>
+        )}
+
         <button
           onClick={() => setIsDismissed(true)}
           className="text-zinc-400 hover:text-white"

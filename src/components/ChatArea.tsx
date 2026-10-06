@@ -18,7 +18,8 @@ import {
   CheckSquare,
   UserPlus,
   LogOut,
-  Image as ImageIcon
+  Image as ImageIcon,
+  LogIn
 } from 'lucide-react';
 import { Conversation, Message, UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -51,13 +52,15 @@ interface ChatAreaProps {
   onBackToSidebar?: () => void;
   onSelectUserChat?: (user: UserProfile) => void;
   onLeaveGroup?: (conversationId: string) => void;
+  onOpenAuthModal?: () => void;
 }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
   conversation,
   onBackToSidebar,
   onSelectUserChat,
-  onLeaveGroup
+  onLeaveGroup,
+  onOpenAuthModal
 }) => {
   const { profile, activePresences } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -482,6 +485,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               title="View full profile & banner"
             >
               <Info size={18} />
+            </button>
+          )}
+
+          {/* Quick Log In / Switch Account Option */}
+          {onOpenAuthModal && (
+            <button
+              type="button"
+              onClick={onOpenAuthModal}
+              className="p-1.5 px-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 font-semibold text-xs border border-emerald-500/20 transition-all shadow-xs flex items-center gap-1 cursor-pointer"
+              title="Log in to account / Switch account"
+            >
+              <LogIn size={14} />
+              <span className="hidden lg:inline text-[11px]">Log In</span>
             </button>
           )}
         </div>

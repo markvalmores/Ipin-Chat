@@ -278,6 +278,8 @@ export async function getMediaBlobUrl(key: string): Promise<string | null> {
 
 export interface DownloadMediaOptions {
   urlOrKey: string;
+  rawKey?: string;
+  mediaUrl?: string;
   fileName?: string;
   fileFormat?: string;
   fileSize?: number;
@@ -285,20 +287,36 @@ export interface DownloadMediaOptions {
 
 /**
  * Downloads the exact binary file with exact byte length and filename!
- * Works across local blobs, IndexedDB cache, Base64 data URLs, and remote URLs.
+ * Works across local blobs, IndexedDB cache, Base64 data URLs, and relative/remote URLs.
  */
 export async function downloadMediaFile(options: DownloadMediaOptions): Promise<boolean> {
-  const { urlOrKey, fileName, fileFormat } = options;
-  if (!urlOrKey) return false;
+  const { urlOrKey, rawKey, mediaUrl, fileName, fileFormat } = options;
+  if (!urlOrKey && !rawKey && !mediaUrl) return false;
 
   let blob: Blob | null = null;
-  const target = String(urlOrKey).trim();
-  const cleanKey = target.replace(/^local_media:/, '');
+  const target = String(urlOrKey || mediaUrl || rawKey || '').trim();
+
+  // Candidate keys for blobCache and IndexedDB lookup
+  const candidateKeys: string[] = [];
+  if (rawKey) candidateKeys.push(rawKey.replace(/^local_media:/, ''));
+  if (mediaUrl) candidateKeys.push(mediaUrl.replace(/^local_media:/, ''));
+  if (target) candidateKeys.push(target.replace(/^local_media:/, ''));
 
   try {
-    // 1. If it's a local_media key or in blob cache/IndexedDB
-    if (target.startsWith('local_media:') || target.startsWith('vid_') || blobCache.has(cleanKey)) {
-      blob = await getMediaBlob(cleanKey);
+    // 1. Check blobCache and IndexedDB for exact original Blob
+    for (const key of candidateKeys) {
+      if (!key) continue;
+      if (blobCache.has(key)) {
+        blob = blobCache.get(key)!;
+        break;
+      }
+      if (key.startsWith('vid_') || !key.includes('/')) {
+        const found = await getMediaBlob(key);
+        if (found) {
+          blob = found;
+          break;
+        }
+      }
     }
 
     // 2. If it's a Base64 data URL
@@ -318,10 +336,11 @@ export async function downloadMediaFile(options: DownloadMediaOptions): Promise<
       }
     }
 
-    // 3. If it's a blob: or http(s): URL
-    if (!blob && (target.startsWith('blob:') || target.startsWith('http://') || target.startsWith('https://'))) {
+    // 3. If it's a relative path (/videos/...), blob:, or http(s): URL
+    if (!blob && (target.startsWith('/') || target.startsWith('blob:') || target.startsWith('http://') || target.startsWith('https://'))) {
       try {
-        const response = await fetch(target, { mode: 'cors' });
+        const fetchUrl = target.startsWith('/') ? `${window.location.origin}${target}` : target;
+        const response = await fetch(fetchUrl, { mode: 'cors' });
         if (response.ok) {
           blob = await response.blob();
         }
@@ -330,7 +349,7 @@ export async function downloadMediaFile(options: DownloadMediaOptions): Promise<
       }
     }
 
-    // Determine final file extension and name
+    // Determine final file extension
     let ext = (fileFormat || '').toLowerCase().replace(/^\./, '');
     if (!ext) {
       if (blob && blob.type) {
@@ -340,16 +359,19 @@ export async function downloadMediaFile(options: DownloadMediaOptions): Promise<
       if (!ext) ext = 'mp4';
     }
 
-    let finalName = fileName ? fileName.trim() : `video_${Date.now()}.${ext}`;
-    if (!finalName.toLowerCase().endsWith(`.${ext}`)) {
-      finalName = `${finalName}.${ext}`;
+    // Determine clean filename without double extensions
+    let finalName = (fileName || '').trim();
+    if (!finalName) {
+      finalName = `video_${Date.now()}.${ext}`;
+    } else {
+      const hasExtension = /\.[a-zA-Z0-9]{2,5}$/.test(finalName);
+      if (!hasExtension) {
+        finalName = `${finalName}.${ext}`;
+      }
     }
 
-    // 4. Trigger download with exact file and size
+    // 4. Trigger download with exact binary file and byte length
     if (blob) {
-      if (!blob.type || blob.type === 'application/octet-stream') {
-        blob = new Blob([blob], { type: `video/${ext}` });
-      }
       const objectUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.style.display = 'none';
@@ -360,7 +382,7 @@ export async function downloadMediaFile(options: DownloadMediaOptions): Promise<
       window.setTimeout(() => {
         document.body.removeChild(a);
         URL.revokeObjectURL(objectUrl);
-      }, 3000);
+      }, 5000);
       return true;
     } else {
       // Direct anchor trigger as fallback
@@ -374,7 +396,7 @@ export async function downloadMediaFile(options: DownloadMediaOptions): Promise<
       a.click();
       window.setTimeout(() => {
         document.body.removeChild(a);
-      }, 3000);
+      }, 5000);
       return true;
     }
   } catch (err) {

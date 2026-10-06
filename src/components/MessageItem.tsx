@@ -377,6 +377,8 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                             type="button"
                             onClick={() => downloadMediaFile({
                               urlOrKey: validSrc || message.mediaUrl || '',
+                              mediaUrl: message.mediaUrl,
+                              rawKey: message.mediaUrl?.replace(/^local_media:/, ''),
                               fileName: message.fileName,
                               fileFormat: message.fileFormat,
                               fileSize: message.fileSize
@@ -412,6 +414,8 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                           type="button"
                           onClick={() => downloadMediaFile({
                             urlOrKey: validSrc || message.mediaUrl || '',
+                            mediaUrl: message.mediaUrl,
+                            rawKey: message.mediaUrl?.replace(/^local_media:/, ''),
                             fileName: message.fileName,
                             fileFormat: message.fileFormat,
                             fileSize: message.fileSize
@@ -521,6 +525,8 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                     e.stopPropagation();
                     downloadMediaFile({
                       urlOrKey: resolvedBlobUrl || message.mediaUrl || '',
+                      mediaUrl: message.mediaUrl,
+                      rawKey: message.mediaUrl?.replace(/^local_media:/, ''),
                       fileName: message.fileName,
                       fileFormat: message.fileFormat,
                       fileSize: message.fileSize
