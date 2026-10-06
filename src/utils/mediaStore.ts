@@ -9,6 +9,7 @@ const DB_VERSION = 1;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 const objectUrlCache = new Map<string, string>();
+const blobCache = new Map<string, Blob>();
 
 function openDB(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
@@ -46,12 +47,14 @@ try {
           const url = URL.createObjectURL(data.blob);
           objectUrlCache.set(cleanKey, url);
           objectUrlCache.set(`local_media:${cleanKey}`, url);
+          blobCache.set(cleanKey, data.blob);
+          blobCache.set(`local_media:${cleanKey}`, data.blob);
 
           const db = await openDB();
           const tx = db.transaction(STORE_NAME, 'readwrite');
           tx.objectStore(STORE_NAME).put(data.blob, cleanKey);
           tx.oncomplete = () => {
-            window.dispatchEvent(new CustomEvent('ipin_media_blob_ready', { detail: { key: cleanKey, url } }));
+            window.dispatchEvent(new CustomEvent('ipin_media_blob_ready', { detail: { key: cleanKey, url, blob: data.blob } }));
           };
         } catch (e) {
           console.warn('Failed to save offered media blob:', e);
@@ -59,11 +62,20 @@ try {
       } else if (data.type === 'REQUEST_MEDIA' && data.key) {
         const cleanKey = String(data.key).replace(/^local_media:/, '');
         try {
+          if (blobCache.has(cleanKey) && mediaChannel) {
+            mediaChannel.postMessage({
+              type: 'OFFER_MEDIA',
+              key: cleanKey,
+              blob: blobCache.get(cleanKey)!
+            });
+            return;
+          }
           const db = await openDB();
           const tx = db.transaction(STORE_NAME, 'readonly');
           const req = tx.objectStore(STORE_NAME).get(cleanKey);
           req.onsuccess = () => {
             if (req.result && mediaChannel) {
+              blobCache.set(cleanKey, req.result);
               mediaChannel.postMessage({
                 type: 'OFFER_MEDIA',
                 key: cleanKey,
@@ -90,6 +102,8 @@ export async function storeMediaBlob(key: string, blob: Blob): Promise<string> {
     const objectUrl = URL.createObjectURL(blob);
     objectUrlCache.set(cleanKey, objectUrl);
     objectUrlCache.set(`local_media:${cleanKey}`, objectUrl);
+    blobCache.set(cleanKey, blob);
+    blobCache.set(`local_media:${cleanKey}`, blob);
 
     const db = await openDB();
     const tx = db.transaction(STORE_NAME, 'readwrite');
@@ -114,13 +128,78 @@ export async function storeMediaBlob(key: string, blob: Blob): Promise<string> {
       }
     }
 
-    window.dispatchEvent(new CustomEvent('ipin_media_blob_ready', { detail: { key: cleanKey, url: objectUrl } }));
+    window.dispatchEvent(new CustomEvent('ipin_media_blob_ready', { detail: { key: cleanKey, url: objectUrl, blob } }));
     return objectUrl;
   } catch (err) {
     console.warn('IndexedDB store failed:', err);
     const fallbackUrl = URL.createObjectURL(blob);
     objectUrlCache.set(cleanKey, fallbackUrl);
+    blobCache.set(cleanKey, blob);
     return fallbackUrl;
+  }
+}
+
+/**
+ * Retrieve the original uncompressed binary Blob for an exact file download
+ */
+export async function getMediaBlob(key: string): Promise<Blob | null> {
+  if (!key) return null;
+  const cleanKey = String(key).replace(/^local_media:/, '');
+
+  if (blobCache.has(cleanKey)) {
+    return blobCache.get(cleanKey)!;
+  }
+  if (blobCache.has(`local_media:${cleanKey}`)) {
+    return blobCache.get(`local_media:${cleanKey}`)!;
+  }
+
+  try {
+    const db = await openDB();
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const store = tx.objectStore(STORE_NAME);
+    const request = store.get(cleanKey);
+
+    const blob = await new Promise<Blob | null>((resolve) => {
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => resolve(null);
+    });
+
+    if (blob) {
+      blobCache.set(cleanKey, blob);
+      return blob;
+    }
+
+    // Request from sender tab
+    if (mediaChannel) {
+      mediaChannel.postMessage({ type: 'REQUEST_MEDIA', key: cleanKey });
+
+      const waitedBlob = await new Promise<Blob | null>((resolve) => {
+        let timer: number | null = null;
+        const handler = (e: Event) => {
+          const detail = (e as CustomEvent).detail;
+          if (detail && (detail.key === cleanKey || detail.key === `local_media:${cleanKey}`) && detail.blob) {
+            window.removeEventListener('ipin_media_blob_ready', handler);
+            if (timer) clearTimeout(timer);
+            resolve(detail.blob);
+          }
+        };
+
+        window.addEventListener('ipin_media_blob_ready', handler);
+        timer = window.setTimeout(() => {
+          window.removeEventListener('ipin_media_blob_ready', handler);
+          resolve(blobCache.get(cleanKey) || null);
+        }, 1200);
+      });
+
+      if (waitedBlob) {
+        blobCache.set(cleanKey, waitedBlob);
+        return waitedBlob;
+      }
+    }
+
+    return null;
+  } catch (err) {
+    return null;
   }
 }
 
@@ -152,6 +231,7 @@ export async function getMediaBlobUrl(key: string): Promise<string | null> {
     });
 
     if (blob) {
+      blobCache.set(cleanKey, blob);
       const url = URL.createObjectURL(blob);
       objectUrlCache.set(cleanKey, url);
       objectUrlCache.set(`local_media:${cleanKey}`, url);
@@ -193,6 +273,113 @@ export async function getMediaBlobUrl(key: string): Promise<string | null> {
     return null;
   } catch (err) {
     return null;
+  }
+}
+
+export interface DownloadMediaOptions {
+  urlOrKey: string;
+  fileName?: string;
+  fileFormat?: string;
+  fileSize?: number;
+}
+
+/**
+ * Downloads the exact binary file with exact byte length and filename!
+ * Works across local blobs, IndexedDB cache, Base64 data URLs, and remote URLs.
+ */
+export async function downloadMediaFile(options: DownloadMediaOptions): Promise<boolean> {
+  const { urlOrKey, fileName, fileFormat } = options;
+  if (!urlOrKey) return false;
+
+  let blob: Blob | null = null;
+  const target = String(urlOrKey).trim();
+  const cleanKey = target.replace(/^local_media:/, '');
+
+  try {
+    // 1. If it's a local_media key or in blob cache/IndexedDB
+    if (target.startsWith('local_media:') || target.startsWith('vid_') || blobCache.has(cleanKey)) {
+      blob = await getMediaBlob(cleanKey);
+    }
+
+    // 2. If it's a Base64 data URL
+    if (!blob && target.startsWith('data:')) {
+      const parts = target.split(',');
+      if (parts.length === 2) {
+        const mimeMatch = parts[0].match(/:(.*?);/);
+        const mimeType = mimeMatch ? mimeMatch[1] : (fileFormat ? `video/${fileFormat}` : 'video/mp4');
+        const b64Data = parts[1];
+        const binaryStr = atob(b64Data);
+        const len = binaryStr.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          bytes[i] = binaryStr.charCodeAt(i);
+        }
+        blob = new Blob([bytes], { type: mimeType });
+      }
+    }
+
+    // 3. If it's a blob: or http(s): URL
+    if (!blob && (target.startsWith('blob:') || target.startsWith('http://') || target.startsWith('https://'))) {
+      try {
+        const response = await fetch(target, { mode: 'cors' });
+        if (response.ok) {
+          blob = await response.blob();
+        }
+      } catch (e) {
+        console.warn('Direct fetch failed, falling back to anchor trigger:', e);
+      }
+    }
+
+    // Determine final file extension and name
+    let ext = (fileFormat || '').toLowerCase().replace(/^\./, '');
+    if (!ext) {
+      if (blob && blob.type) {
+        const typePart = blob.type.split('/')[1];
+        if (typePart) ext = typePart.split(';')[0];
+      }
+      if (!ext) ext = 'mp4';
+    }
+
+    let finalName = fileName ? fileName.trim() : `video_${Date.now()}.${ext}`;
+    if (!finalName.toLowerCase().endsWith(`.${ext}`)) {
+      finalName = `${finalName}.${ext}`;
+    }
+
+    // 4. Trigger download with exact file and size
+    if (blob) {
+      if (!blob.type || blob.type === 'application/octet-stream') {
+        blob = new Blob([blob], { type: `video/${ext}` });
+      }
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = objectUrl;
+      a.download = finalName;
+      document.body.appendChild(a);
+      a.click();
+      window.setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(objectUrl);
+      }, 3000);
+      return true;
+    } else {
+      // Direct anchor trigger as fallback
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = target;
+      a.download = finalName;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      document.body.appendChild(a);
+      a.click();
+      window.setTimeout(() => {
+        document.body.removeChild(a);
+      }, 3000);
+      return true;
+    }
+  } catch (err) {
+    console.error('downloadMediaFile error:', err);
+    return false;
   }
 }
 

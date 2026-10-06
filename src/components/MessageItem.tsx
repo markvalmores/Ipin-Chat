@@ -4,7 +4,7 @@ import { Message, UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { toggleMessageReaction, editMessage } from '../services/chatService';
 import { translateText, translateTextAsync } from '../utils/translator';
-import { getMediaBlobUrl } from '../utils/mediaStore';
+import { getMediaBlobUrl, downloadMediaFile } from '../utils/mediaStore';
 import { GifPickerModal } from './GifPickerModal';
 import { TenorGif } from '../services/tenorService';
 
@@ -373,14 +373,20 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                         <p className="text-xs font-semibold">{message.fileName || 'Video Attachment'}</p>
                         <p className="text-[11px] text-zinc-400">{formatFileSize(message.fileSize)}</p>
                         {validSrc && (
-                          <a
-                            href={validSrc}
-                            download={message.fileName || 'video.mp4'}
-                            className="mt-1 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md"
+                          <button
+                            type="button"
+                            onClick={() => downloadMediaFile({
+                              urlOrKey: validSrc || message.mediaUrl || '',
+                              fileName: message.fileName,
+                              fileFormat: message.fileFormat,
+                              fileSize: message.fileSize
+                            })}
+                            className="mt-1 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md cursor-pointer"
+                            title="Download exact video file"
                           >
                             <Download size={13} />
-                            <span>Download & Play</span>
-                          </a>
+                            <span>Download Exact Video</span>
+                          </button>
                         )}
                       </div>
                     );
@@ -401,6 +407,20 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                         <div className="absolute top-2 right-2 px-2 py-0.5 rounded-md bg-black/60 text-[10px] text-white font-mono uppercase backdrop-blur-xs pointer-events-none">
                           {message.fileFormat?.toUpperCase() || 'MP4'}
                         </div>
+                        {/* Download exact video file button */}
+                        <button
+                          type="button"
+                          onClick={() => downloadMediaFile({
+                            urlOrKey: validSrc || message.mediaUrl || '',
+                            fileName: message.fileName,
+                            fileFormat: message.fileFormat,
+                            fileSize: message.fileSize
+                          })}
+                          className="absolute top-2 right-12 p-1.5 rounded-lg bg-black/60 hover:bg-black/80 text-white transition-colors cursor-pointer"
+                          title="Download exact video file"
+                        >
+                          <Download size={14} />
+                        </button>
                         {/* Expand to fullscreen preview button */}
                         <button
                           type="button"
@@ -497,8 +517,17 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 </div>
                 <button
                   type="button"
-                  className="p-2 rounded-full bg-white/20 hover:bg-white/30 text-white"
-                  title="Download / Play"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    downloadMediaFile({
+                      urlOrKey: resolvedBlobUrl || message.mediaUrl || '',
+                      fileName: message.fileName,
+                      fileFormat: message.fileFormat,
+                      fileSize: message.fileSize
+                    });
+                  }}
+                  className="p-2 rounded-full bg-white/20 hover:bg-white/30 text-white transition-colors cursor-pointer"
+                  title="Download exact video file"
                 >
                   <Download size={14} />
                 </button>

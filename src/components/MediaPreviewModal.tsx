@@ -11,7 +11,7 @@ import {
   Maximize,
   RotateCcw
 } from 'lucide-react';
-import { getMediaBlobUrl } from '../utils/mediaStore';
+import { getMediaBlobUrl, downloadMediaFile } from '../utils/mediaStore';
 
 interface MediaPreviewModalProps {
   isOpen: boolean;
@@ -42,6 +42,7 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [showControls, setShowControls] = useState(true);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const controlsTimeoutRef = useRef<number | null>(null);
@@ -58,6 +59,30 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
   const effectivePoster =
     posterUrl ||
     (mediaUrl && mediaUrl.startsWith('data:image/') ? mediaUrl : undefined);
+
+  // Download exact video/media file
+  const handleDownload = async (e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    const targetSource = resolvedUrl || mediaUrl;
+    if (!targetSource || isDownloading) return;
+
+    setIsDownloading(true);
+    try {
+      await downloadMediaFile({
+        urlOrKey: targetSource,
+        fileName,
+        fileFormat,
+        fileSize
+      });
+    } catch (err) {
+      console.error('Download error:', err);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
 
   // Reset state and resolve URL whenever modal opens or mediaUrl changes
   useEffect(() => {
@@ -236,16 +261,21 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
-          {playableVideoSrc && (
-            <a
-              href={playableVideoSrc}
-              download={fileName || `video.${fileFormat || 'mp4'}`}
-              className="p-2 sm:p-2.5 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors flex items-center gap-1.5 text-xs font-medium cursor-pointer"
-              title="Download video file"
+          {(playableVideoSrc || resolvedUrl || mediaUrl) && (
+            <button
+              type="button"
+              onClick={handleDownload}
+              disabled={isDownloading}
+              className="px-3 py-1.5 sm:py-2 rounded-full bg-emerald-600/90 hover:bg-emerald-500 active:scale-95 text-white transition-all flex items-center gap-1.5 text-xs font-semibold cursor-pointer shadow-md disabled:opacity-50"
+              title="Download exact video file"
             >
-              <Download size={17} />
-              <span className="hidden sm:inline">Save</span>
-            </a>
+              {isDownloading ? (
+                <Loader2 size={16} className="animate-spin text-white" />
+              ) : (
+                <Download size={16} />
+              )}
+              <span>{isDownloading ? 'Saving...' : 'Download'}</span>
+            </button>
           )}
           <button
             type="button"
@@ -313,16 +343,19 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
                     <span>Retry Video Stream</span>
                   </button>
 
-                  {playableVideoSrc && (
-                    <a
-                      href={playableVideoSrc}
-                      download={fileName || 'video.mp4'}
-                      className="w-full py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium text-xs flex items-center justify-center gap-2 transition-colors"
-                    >
+                  <button
+                    type="button"
+                    onClick={handleDownload}
+                    disabled={isDownloading}
+                    className="w-full py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    {isDownloading ? (
+                      <Loader2 size={14} className="animate-spin text-emerald-400" />
+                    ) : (
                       <Download size={14} />
-                      <span>Download Video</span>
-                    </a>
-                  )}
+                    )}
+                    <span>{isDownloading ? 'Saving Exact File...' : 'Download Video File'}</span>
+                  </button>
                 </div>
               </div>
             ) : (
@@ -426,6 +459,19 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
+                        onClick={handleDownload}
+                        disabled={isDownloading}
+                        className="p-1.5 rounded-full hover:bg-white/20 text-white transition-colors cursor-pointer"
+                        title="Download exact video file"
+                      >
+                        {isDownloading ? (
+                          <Loader2 size={16} className="animate-spin text-emerald-400" />
+                        ) : (
+                          <Download size={16} />
+                        )}
+                      </button>
+                      <button
+                        type="button"
                         onClick={handleToggleFullscreen}
                         className="p-1.5 rounded-full hover:bg-white/20 text-white transition-colors cursor-pointer"
                         title="Fullscreen"
@@ -455,16 +501,15 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
                 ipin Messenger successfully relayed this video payload across the global China bridge. You can download and open it in any desktop or native media player (VLC, PotPlayer).
               </p>
             </div>
-            {resolvedUrl && (
-              <a
-                href={resolvedUrl}
-                download={fileName || `file.${fileFormat}`}
-                className="mt-2 w-full py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-lg transition-all"
-              >
-                <Download size={16} />
-                Download & Play {fileFormat?.toUpperCase()}
-              </a>
-            )}
+            <button
+              type="button"
+              onClick={handleDownload}
+              disabled={isDownloading}
+              className="mt-2 w-full py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer disabled:opacity-50"
+            >
+              {isDownloading ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+              <span>{isDownloading ? 'Saving Exact File...' : `Download & Play ${fileFormat?.toUpperCase() || 'Video'}`}</span>
+            </button>
           </div>
         )}
       </div>
