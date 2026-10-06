@@ -169,7 +169,7 @@ export const INITIAL_STORIES: Story[] = [
     userId: 'demo_user_alex',
     userName: 'Alex Carter',
     userPhoto: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
-    mediaUrl: 'https://assets.mixkit.co/videos/preview/mixkit-tree-branches-in-the-breeze-1188-large.mp4',
+    mediaUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
     mediaType: 'video', // Demo video story!
     text: 'Morning breeze in California before team standup. Sending good vibes to Asia! 🌿',
     viewers: ['demo_user_meiling'],
@@ -241,7 +241,7 @@ export const INITIAL_CHANNEL_MESSAGES: Record<string, any[]> = {
       senderName: 'Alex Carter',
       senderPhoto: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
       text: 'That looks stunning Mei Ling! Here is a clip I took of the coastal redwoods this morning. The green theme here on ipin feels right at home! 🌲',
-      mediaUrl: 'https://assets.mixkit.co/videos/preview/mixkit-tree-branches-in-the-breeze-1188-large.mp4',
+      mediaUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
       mediaType: 'video',
       fileName: 'california_redwoods_breeze.mp4',
       fileFormat: 'mp4',

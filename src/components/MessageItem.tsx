@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Smile, Check, CheckCheck, Languages, Download, Play, FileText, Film, Volume2, Sparkles, Pencil, X, Trash2, CheckSquare } from 'lucide-react';
+import { Smile, Check, CheckCheck, Languages, Download, Play, FileText, Film, Volume2, Sparkles, Pencil, X, Trash2, CheckSquare, Maximize } from 'lucide-react';
 import { Message, UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { toggleMessageReaction, editMessage } from '../services/chatService';
@@ -13,7 +13,7 @@ interface MessageItemProps {
   conversationId: string;
   isSelf: boolean;
   showSenderInfo: boolean;
-  onPreviewMedia: (media: { url: string; type: string; name?: string; format?: string; size?: number }) => void;
+  onPreviewMedia: (media: { url: string; type: string; name?: string; format?: string; size?: number; posterUrl?: string }) => void;
   onSelectUserChat?: (user: UserProfile) => void;
   onOpenUserProfile?: (userId: string, userName?: string) => void;
   onDeleteMessage?: (messageId: string) => void;
@@ -401,6 +401,24 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                         <div className="absolute top-2 right-2 px-2 py-0.5 rounded-md bg-black/60 text-[10px] text-white font-mono uppercase backdrop-blur-xs pointer-events-none">
                           {message.fileFormat?.toUpperCase() || 'MP4'}
                         </div>
+                        {/* Expand to fullscreen preview button */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onPreviewMedia({
+                              url: validSrc,
+                              type: 'video',
+                              name: message.fileName,
+                              format: message.fileFormat,
+                              size: message.fileSize,
+                              posterUrl: poster || message.posterUrl
+                            });
+                          }}
+                          className="absolute top-2 left-2 p-1.5 rounded-lg bg-black/60 hover:bg-black/80 text-white transition-colors cursor-pointer"
+                          title="Open Fullscreen Preview"
+                        >
+                          <Maximize size={14} />
+                        </button>
                       </div>
                     );
                   }
@@ -409,13 +427,23 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                   return (
                     <div
                       className="relative cursor-pointer group/vid"
-                      onClick={() => {
+                      onClick={async () => {
+                        let finalSrc = validSrc;
+                        if (!finalSrc && message.mediaUrl) {
+                          const key = message.mediaUrl.replace('local_media:', '');
+                          const url = await getMediaBlobUrl(key);
+                          if (url) {
+                            setResolvedBlobUrl(url);
+                            finalSrc = url;
+                          }
+                        }
                         onPreviewMedia({
-                          url: validSrc || poster || '',
+                          url: finalSrc || (message.mediaUrl && !message.mediaUrl.startsWith('data:image/') ? message.mediaUrl : '') || '',
                           type: 'video',
                           name: message.fileName,
                           format: message.fileFormat,
-                          size: message.fileSize
+                          size: message.fileSize,
+                          posterUrl: poster || message.posterUrl
                         });
                       }}
                     >
@@ -427,10 +455,10 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                         </div>
                       )}
                       <div className="absolute inset-0 bg-black/40 flex flex-col items-center justify-center gap-1.5 text-white">
-                        <div className="w-11 h-11 rounded-full bg-emerald-600/90 flex items-center justify-center text-white shadow-lg group-hover/vid:scale-110 transition-transform">
-                          <Play size={20} fill="currentColor" className="ml-0.5" />
+                        <div className="w-12 h-12 rounded-full bg-emerald-600/95 hover:bg-emerald-500 active:scale-90 flex items-center justify-center text-white shadow-xl group-hover/vid:scale-110 transition-transform">
+                          <Play size={24} fill="currentColor" className="ml-0.5" />
                         </div>
-                        <span className="text-[11px] font-semibold bg-black/70 px-2 py-0.5 rounded-md">
+                        <span className="text-[11px] font-semibold bg-black/70 px-2.5 py-0.5 rounded-md">
                           {message.fileName || 'Video'} • {formatFileSize(message.fileSize)}
                         </span>
                       </div>

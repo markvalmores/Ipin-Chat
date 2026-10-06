@@ -83,6 +83,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     name?: string;
     format?: string;
     size?: number;
+    posterUrl?: string;
   } | null>(null);
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([]);
@@ -675,6 +676,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           fileName={selectedMedia.name}
           fileFormat={selectedMedia.format}
           fileSize={selectedMedia.size}
+          posterUrl={selectedMedia.posterUrl}
         />
       )}
 

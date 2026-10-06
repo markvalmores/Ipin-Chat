@@ -8,6 +8,7 @@ const STORE_NAME = 'media_blobs';
 const DB_VERSION = 1;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
+const objectUrlCache = new Map<string, string>();
 
 function openDB(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
@@ -41,26 +42,31 @@ try {
 
       if (data.type === 'OFFER_MEDIA' && data.key && data.blob) {
         try {
+          const cleanKey = String(data.key).replace(/^local_media:/, '');
+          const url = URL.createObjectURL(data.blob);
+          objectUrlCache.set(cleanKey, url);
+          objectUrlCache.set(`local_media:${cleanKey}`, url);
+
           const db = await openDB();
           const tx = db.transaction(STORE_NAME, 'readwrite');
-          tx.objectStore(STORE_NAME).put(data.blob, data.key);
+          tx.objectStore(STORE_NAME).put(data.blob, cleanKey);
           tx.oncomplete = () => {
-            window.dispatchEvent(new CustomEvent('ipin_media_blob_ready', { detail: { key: data.key } }));
+            window.dispatchEvent(new CustomEvent('ipin_media_blob_ready', { detail: { key: cleanKey, url } }));
           };
         } catch (e) {
           console.warn('Failed to save offered media blob:', e);
         }
       } else if (data.type === 'REQUEST_MEDIA' && data.key) {
-        // Send back if we have it
+        const cleanKey = String(data.key).replace(/^local_media:/, '');
         try {
           const db = await openDB();
           const tx = db.transaction(STORE_NAME, 'readonly');
-          const req = tx.objectStore(STORE_NAME).get(data.key);
+          const req = tx.objectStore(STORE_NAME).get(cleanKey);
           req.onsuccess = () => {
             if (req.result && mediaChannel) {
               mediaChannel.postMessage({
                 type: 'OFFER_MEDIA',
-                key: data.key,
+                key: cleanKey,
                 blob: req.result
               });
             }
@@ -78,12 +84,17 @@ try {
 /**
  * Save a media blob (video/audio/file) to IndexedDB and broadcast across open tabs
  */
-export async function storeMediaBlob(key: string, blob: Blob): Promise<void> {
+export async function storeMediaBlob(key: string, blob: Blob): Promise<string> {
+  const cleanKey = String(key).replace(/^local_media:/, '');
   try {
+    const objectUrl = URL.createObjectURL(blob);
+    objectUrlCache.set(cleanKey, objectUrl);
+    objectUrlCache.set(`local_media:${cleanKey}`, objectUrl);
+
     const db = await openDB();
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
-    store.put(blob, key);
+    store.put(blob, cleanKey);
 
     await new Promise<void>((resolve, reject) => {
       tx.oncomplete = () => resolve();
@@ -95,7 +106,7 @@ export async function storeMediaBlob(key: string, blob: Blob): Promise<void> {
       try {
         mediaChannel.postMessage({
           type: 'OFFER_MEDIA',
-          key,
+          key: cleanKey,
           blob
         });
       } catch (err) {
@@ -103,9 +114,13 @@ export async function storeMediaBlob(key: string, blob: Blob): Promise<void> {
       }
     }
 
-    window.dispatchEvent(new CustomEvent('ipin_media_blob_ready', { detail: { key } }));
+    window.dispatchEvent(new CustomEvent('ipin_media_blob_ready', { detail: { key: cleanKey, url: objectUrl } }));
+    return objectUrl;
   } catch (err) {
     console.warn('IndexedDB store failed:', err);
+    const fallbackUrl = URL.createObjectURL(blob);
+    objectUrlCache.set(cleanKey, fallbackUrl);
+    return fallbackUrl;
   }
 }
 
@@ -113,11 +128,23 @@ export async function storeMediaBlob(key: string, blob: Blob): Promise<void> {
  * Retrieve a media blob and return a playable object URL (blob:http...)
  */
 export async function getMediaBlobUrl(key: string): Promise<string | null> {
+  if (!key) return null;
+  const cleanKey = String(key).replace(/^local_media:/, '');
+
+  // 1. Instant synchronous memory check
+  if (objectUrlCache.has(cleanKey)) {
+    return objectUrlCache.get(cleanKey)!;
+  }
+  if (objectUrlCache.has(`local_media:${cleanKey}`)) {
+    return objectUrlCache.get(`local_media:${cleanKey}`)!;
+  }
+
+  // 2. Local IndexedDB lookup
   try {
     const db = await openDB();
     const tx = db.transaction(STORE_NAME, 'readonly');
     const store = tx.objectStore(STORE_NAME);
-    const request = store.get(key);
+    const request = store.get(cleanKey);
 
     const blob = await new Promise<Blob | null>((resolve) => {
       request.onsuccess = () => resolve(request.result || null);
@@ -125,43 +152,41 @@ export async function getMediaBlobUrl(key: string): Promise<string | null> {
     });
 
     if (blob) {
-      return URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
+      objectUrlCache.set(cleanKey, url);
+      objectUrlCache.set(`local_media:${cleanKey}`, url);
+      return url;
     }
 
-    // If not found locally, request from sender tab via BroadcastChannel
+    // 3. If not found locally, request from sender tab via BroadcastChannel
     if (mediaChannel) {
-      mediaChannel.postMessage({ type: 'REQUEST_MEDIA', key });
+      mediaChannel.postMessage({ type: 'REQUEST_MEDIA', key: cleanKey });
 
       // Wait up to 1.5s for response
-      const waitedBlob = await new Promise<Blob | null>((resolve) => {
+      const waitedUrl = await new Promise<string | null>((resolve) => {
         let timer: number | null = null;
 
-        const handler = async (e: Event) => {
+        const handler = (e: Event) => {
           const detail = (e as CustomEvent).detail;
-          if (detail && detail.key === key) {
+          if (detail && (detail.key === cleanKey || detail.key === `local_media:${cleanKey}`)) {
             window.removeEventListener('ipin_media_blob_ready', handler);
             if (timer) clearTimeout(timer);
-            try {
-              const checkDb = await openDB();
-              const checkTx = checkDb.transaction(STORE_NAME, 'readonly');
-              const checkReq = checkTx.objectStore(STORE_NAME).get(key);
-              checkReq.onsuccess = () => resolve(checkReq.result || null);
-              checkReq.onerror = () => resolve(null);
-            } catch {
-              resolve(null);
-            }
+            resolve(detail.url || objectUrlCache.get(cleanKey) || null);
           }
         };
 
         window.addEventListener('ipin_media_blob_ready', handler);
         timer = window.setTimeout(() => {
           window.removeEventListener('ipin_media_blob_ready', handler);
-          resolve(null);
-        }, 1500);
+          resolve(objectUrlCache.get(cleanKey) || null);
+        }, 1200);
       });
 
-      if (waitedBlob) {
-        return URL.createObjectURL(waitedBlob);
+      if (waitedUrl) {
+        return waitedUrl;
+      }
+      if (objectUrlCache.has(cleanKey)) {
+        return objectUrlCache.get(cleanKey)!;
       }
     }
 
