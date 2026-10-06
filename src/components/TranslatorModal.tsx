@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
   Languages,
@@ -7,9 +7,10 @@ import {
   Check,
   Sparkles,
   Send,
-  Volume2
+  Volume2,
+  Loader2
 } from 'lucide-react';
-import { translateText, isChinese, generatePinyin } from '../utils/translator';
+import { translateTextAsync, isChinese, generatePinyin, TranslationResult } from '../utils/translator';
 
 interface TranslatorModalProps {
   isOpen: boolean;
@@ -25,8 +26,10 @@ export const TranslatorModal: React.FC<TranslatorModalProps> = ({
   const [inputText, setInputText] = useState('');
   const [direction, setDirection] = useState<'auto' | 'en_to_zh' | 'zh_to_en'>('auto');
   const [copied, setCopied] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [translation, setTranslation] = useState<TranslationResult | null>(null);
 
-  if (!isOpen) return null;
+  const debounceTimerRef = useRef<number | null>(null);
 
   const currentIsChinese = isChinese(inputText);
   const effectiveDirection =
@@ -36,12 +39,46 @@ export const TranslatorModal: React.FC<TranslatorModalProps> = ({
         : 'en_to_zh'
       : direction;
 
-  const translation = inputText.trim()
-    ? translateText(
-        inputText,
-        effectiveDirection === 'en_to_zh' ? 'zh' : 'en'
-      )
-    : null;
+  useEffect(() => {
+    if (!inputText.trim()) {
+      setTranslation(null);
+      setIsLoading(false);
+      return;
+    }
+
+    setIsLoading(true);
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
+    debounceTimerRef.current = window.setTimeout(async () => {
+      try {
+        const target = effectiveDirection === 'en_to_zh' ? 'zh' : 'en';
+        const res = await translateTextAsync(inputText, target);
+        setTranslation(res);
+      } catch (err) {
+        console.warn('Translation error:', err);
+      } finally {
+        setIsLoading(false);
+      }
+    }, 350);
+
+    return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    };
+  }, [inputText, effectiveDirection]);
+
+  if (!isOpen) return null;
+
+  const handleSpeak = (textToSpeak: string, lang: 'zh' | 'en') => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(textToSpeak);
+      utterance.lang = lang === 'zh' ? 'zh-CN' : 'en-US';
+      utterance.rate = 0.9;
+      window.speechSynthesis.speak(utterance);
+    }
+  };
 
   const handleCopy = () => {
     if (!translation) return;
@@ -63,6 +100,7 @@ export const TranslatorModal: React.FC<TranslatorModalProps> = ({
     { en: 'Have you eaten yet?', zh: '你吃了吗？' },
     { en: 'Thank you very much!', zh: '非常感谢！' },
     { en: 'Let’s grab Sichuan hotpot!', zh: '我们去吃四川火锅吧！' },
+    { en: 'Watch this video, it is cool!', zh: '看看这个视频，太酷了！' },
     { en: 'Nice to meet you!', zh: '很高兴认识你！' },
     { en: 'Cross-border chat is so fast!', zh: '跨境聊天太快了！' }
   ];
@@ -84,7 +122,7 @@ export const TranslatorModal: React.FC<TranslatorModalProps> = ({
                 Chinese ⇄ English Translator
               </h3>
               <p className="text-xs text-zinc-500">
-                Translate with Pinyin pronunciation & instant chat insert
+                Accurate translation with tone Pinyin & audio speech
               </p>
             </div>
           </div>
@@ -117,45 +155,62 @@ export const TranslatorModal: React.FC<TranslatorModalProps> = ({
         </div>
 
         {/* Input Text Area */}
-        <div className="mt-4">
+        <div className="mt-4 relative">
           <textarea
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             placeholder={
               effectiveDirection === 'en_to_zh'
-                ? 'Type in English (e.g. Good morning, let us chat!)...'
-                : '输入中文 (例如: 你好，今天天气真好！)...'
+                ? 'Type in English (e.g. Video is playing smoothly now!)...'
+                : '输入中文 (例如: 视频播放很流畅，大家来聊天吧!)...'
             }
             rows={3}
             className="w-full p-3.5 rounded-2xl bg-zinc-50 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 resize-none"
             autoFocus
           />
+          {isLoading && (
+            <div className="absolute right-3 bottom-3 flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 bg-white/80 dark:bg-zinc-800/80 px-2 py-1 rounded-lg backdrop-blur-xs">
+              <Loader2 size={13} className="animate-spin" />
+              <span>Translating...</span>
+            </div>
+          )}
         </div>
 
         {/* Translation Output Box */}
         {translation && (
-          <div className="mt-3 p-4 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/40 border border-emerald-500/30 space-y-2">
+          <div className="mt-3 p-4 rounded-2xl bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-500/30 space-y-2 animate-in fade-in duration-150">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-800 dark:text-emerald-300">
                 Translation
               </span>
-              <button
-                type="button"
-                onClick={handleCopy}
-                className="flex items-center gap-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 hover:underline"
-              >
-                {copied ? <Check size={13} /> : <Copy size={13} />}
-                <span>{copied ? 'Copied!' : 'Copy'}</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleSpeak(translation.translated, translation.targetLang)}
+                  className="flex items-center gap-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 hover:underline"
+                  title="Listen to pronunciation"
+                >
+                  <Volume2 size={13} />
+                  <span>Pronounce</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCopy}
+                  className="flex items-center gap-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 hover:underline ml-2"
+                >
+                  {copied ? <Check size={13} /> : <Copy size={13} />}
+                  <span>{copied ? 'Copied!' : 'Copy'}</span>
+                </button>
+              </div>
             </div>
 
-            <p className="text-base font-bold text-zinc-900 dark:text-zinc-100">
+            <p className="text-base font-bold text-zinc-900 dark:text-zinc-100 leading-relaxed">
               {translation.translated}
             </p>
 
             {translation.pinyin && (
-              <div className="pt-1 text-xs text-emerald-700 dark:text-emerald-300 font-mono flex items-center gap-1.5">
-                <span className="px-1.5 py-0.5 rounded bg-emerald-200/50 dark:bg-emerald-900/60 font-semibold text-[10px]">
+              <div className="pt-1 text-xs text-emerald-700 dark:text-emerald-300 font-mono flex items-center gap-1.5 flex-wrap">
+                <span className="px-1.5 py-0.5 rounded bg-emerald-200/60 dark:bg-emerald-900/60 font-semibold text-[10px]">
                   PINYIN
                 </span>
                 <span>{translation.pinyin}</span>
@@ -190,7 +245,7 @@ export const TranslatorModal: React.FC<TranslatorModalProps> = ({
               type="button"
               disabled={!translation}
               onClick={handleInsert}
-              className="flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 disabled:opacity-50 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-md transition-all"
+              className="flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 disabled:opacity-50 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-md transition-all cursor-pointer"
             >
               <Send size={15} />
               <span>Insert into Chat Input</span>
@@ -200,7 +255,7 @@ export const TranslatorModal: React.FC<TranslatorModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="py-2.5 px-4 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 font-semibold text-xs hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
+            className="py-2.5 px-4 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 font-semibold text-xs hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors cursor-pointer"
           >
             Close
           </button>

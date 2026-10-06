@@ -14,7 +14,7 @@ import {
   Square
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { translateText } from '../utils/translator';
+import { translateText, translateTextAsync } from '../utils/translator';
 import { compressImageForUpload, captureVideoPoster, storeMediaBlob } from '../utils/mediaStore';
 import { GifPickerModal } from './GifPickerModal';
 import { TenorGif } from '../services/tenorService';
@@ -23,6 +23,7 @@ interface MessageInputProps {
   onSendMessage: (data: {
     text?: string;
     mediaUrl?: string;
+    posterUrl?: string;
     mediaType?: 'image' | 'video' | 'audio' | 'file' | 'none';
     fileName?: string;
     fileSize?: number;
@@ -201,34 +202,47 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
       // Auto-translate if turned on
       if (autoTranslate && finalMessageText) {
-        const translated = translateText(finalMessageText);
-        if (translated.pinyin) {
-          finalMessageText = `${finalMessageText}\n[Pinyin: ${translated.pinyin}] (${translated.translated})`;
-        } else {
-          finalMessageText = `${finalMessageText} (${translated.translated})`;
+        try {
+          const translated = await translateTextAsync(finalMessageText);
+          if (translated.pinyin) {
+            finalMessageText = `${finalMessageText}\n[Pinyin: ${translated.pinyin}] (${translated.translated})`;
+          } else {
+            finalMessageText = `${finalMessageText} (${translated.translated})`;
+          }
+        } catch {
+          const translated = translateText(finalMessageText);
+          if (translated.pinyin) {
+            finalMessageText = `${finalMessageText}\n[Pinyin: ${translated.pinyin}] (${translated.translated})`;
+          } else {
+            finalMessageText = `${finalMessageText} (${translated.translated})`;
+          }
         }
       }
 
       if (selectedFile) {
         let finalMediaUrl = '';
+        let posterUrl: string | undefined = undefined;
 
         if (selectedFile.type === 'image') {
           // Compress image so it never exceeds Firestore 1MB limits
           finalMediaUrl = await compressImageForUpload(selectedFile.file);
         } else if (selectedFile.type === 'video') {
-          // If small enough (< 500KB), convert to dataUrl
-          if (selectedFile.size < 500 * 1024) {
+          const poster = await captureVideoPoster(selectedFile.file);
+          posterUrl = poster || undefined;
+          const mediaKey = `vid_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+          // Store full video blob into IndexedDB and broadcast to viewer tabs
+          await storeMediaBlob(mediaKey, selectedFile.file);
+
+          if (selectedFile.size < 600 * 1024) {
+            // Small video: embed dataUrl directly so all remote devices play instantly
             finalMediaUrl = await new Promise<string>((res) => {
               const reader = new FileReader();
               reader.onload = () => res(reader.result as string);
               reader.readAsDataURL(selectedFile.file);
             });
           } else {
-            // For larger videos, extract thumbnail poster and store blob
-            const poster = await captureVideoPoster(selectedFile.file);
-            const mediaKey = `vid_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-            await storeMediaBlob(mediaKey, selectedFile.file);
-            finalMediaUrl = poster || selectedFile.previewUrl;
+            // Larger video: reference cross-tab synchronized blob key
+            finalMediaUrl = `local_media:${mediaKey}`;
           }
         } else {
           // Audio or file
@@ -242,6 +256,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         await onSendMessage({
           text: finalMessageText,
           mediaUrl: finalMediaUrl,
+          posterUrl: posterUrl,
           mediaType: selectedFile.type,
           fileName: selectedFile.name,
           fileSize: selectedFile.size,

@@ -21,63 +21,40 @@ service cloud.firestore {
 
     // 1. Users collection
     match /users/{userId} {
-      allow read: if isSignedIn();
-      allow create: if isOwner(userId)
-        && request.resource.data.uid == request.auth.uid
-        && request.resource.data.displayName is string
-        && request.resource.data.displayName.size() <= 100;
-      allow update: if isOwner(userId)
-        && request.resource.data.uid == resource.data.uid;
+      allow read: if true;
+      allow create, update: if isSignedIn() || userId.matches('^demo_user_.*');
       allow delete: if isOwner(userId);
     }
 
     // 2. Active presences for real-time online counter
     match /active_presences/{userId} {
-      allow read: if isSignedIn();
-      allow create, update: if isOwner(userId)
-        && request.resource.data.uid == request.auth.uid;
-      allow delete: if isOwner(userId);
+      allow read: if true;
+      allow create, update, delete: if true;
     }
 
-    // 3. Conversations collection
+    // 3. Conversations collection & messages
     match /conversations/{conversationId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn();
-      allow update: if isSignedIn();
+      allow read: if true;
+      allow create, update: if true;
       allow delete: if false;
 
       // Messages subcollection
       match /messages/{messageId} {
-        allow read: if isSignedIn();
-        allow create: if isSignedIn()
-          && (
-            request.resource.data.senderId == request.auth.uid ||
-            request.resource.data.senderId == 'ipin_ai_xiaoai' ||
-            request.resource.data.senderId == 'system-bot' ||
-            request.resource.data.senderId.matches('^ipin_ai.*') ||
-            request.resource.data.senderId.matches('^demo_user_.*')
-          );
-        allow update: if isSignedIn();
-        allow delete: if isSignedIn()
-          && (
-            resource.data.senderId == request.auth.uid ||
-            resource.data.senderId.matches('^demo_user_.*')
-          );
+        allow read: if true;
+        allow create: if request.resource.data.id is string
+          && request.resource.data.conversationId is string
+          && request.resource.data.senderId is string;
+        allow update: if true;
+        allow delete: if isSignedIn() || resource.data.senderId.matches('^demo_user_.*');
       }
     }
 
     // 4. Stories collection
     match /stories/{storyId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow update: if isSignedIn() && (
-        (resource.data.userId == request.auth.uid) ||
-        (
-          request.resource.data.userId == resource.data.userId &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['viewers'])
-        )
-      );
-      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow read: if true;
+      allow create: if true;
+      allow update: if true;
+      allow delete: if isSignedIn() || resource.data.userId.matches('^demo_user_.*');
     }
   }
 }

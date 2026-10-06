@@ -4,6 +4,8 @@ import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  signInWithPopup,
+  GoogleAuthProvider,
   signInAnonymously,
   signOut,
   sendPasswordResetEmail,
@@ -29,6 +31,7 @@ interface AuthContextType {
   activePresences: ActivePresence[];
   activeCount: number;
   loginError: string | null;
+  signInWithGoogle: () => Promise<void>;
   signUp: (email: string, pass: string, name: string, location?: string, avatar?: string) => Promise<void>;
   signIn: (email: string, pass: string) => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
@@ -90,10 +93,20 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           });
         }
       } else {
-        // User is not logged in. Must create account or sign in first.
         setUser(null);
-        setProfile(null);
-        setIsDemoMode(false);
+        try {
+          const stored = localStorage.getItem('ipin_active_demo_user');
+          if (stored) {
+            setProfile(JSON.parse(stored));
+            setIsDemoMode(true);
+          } else {
+            setProfile(null);
+            setIsDemoMode(false);
+          }
+        } catch (e) {
+          setProfile(null);
+          setIsDemoMode(false);
+        }
       }
       setIsAuthReady(true);
     });
@@ -253,12 +266,29 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
+  const signInWithGoogle = async () => {
+    setLoginError(null);
+    try {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+      try {
+        localStorage.removeItem('ipin_active_demo_user');
+      } catch (e) {}
+    } catch (err: any) {
+      setLoginError(err.message || 'Failed to sign in with Google');
+      throw err;
+    }
+  };
+
   const signOutUser = async () => {
     if (profile?.uid) {
       try {
         await deleteDoc(doc(db, 'active_presences', profile.uid));
       } catch (err) {}
     }
+    try {
+      localStorage.removeItem('ipin_active_demo_user');
+    } catch (e) {}
     await signOut(auth);
     setUser(null);
     setProfile(null);
@@ -303,6 +333,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const switchDemoUser = async (demoUser: UserProfile) => {
     setProfile(demoUser);
     setIsDemoMode(true);
+    try {
+      localStorage.setItem('ipin_active_demo_user', JSON.stringify(demoUser));
+    } catch (e) {}
     if (!auth.currentUser) {
       try {
         await signInAnonymously(auth);
@@ -323,6 +356,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         activePresences,
         activeCount: Math.max(1, activePresences.length),
         loginError,
+        signInWithGoogle,
         signUp,
         signIn,
         resetPassword,

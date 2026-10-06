@@ -3,7 +3,7 @@ import { Smile, Check, CheckCheck, Languages, Download, Play, FileText, Film, Vo
 import { Message, UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { toggleMessageReaction, editMessage } from '../services/chatService';
-import { translateText } from '../utils/translator';
+import { translateText, translateTextAsync } from '../utils/translator';
 import { getMediaBlobUrl } from '../utils/mediaStore';
 import { GifPickerModal } from './GifPickerModal';
 import { TenorGif } from '../services/tenorService';
@@ -50,6 +50,8 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   const [editText, setEditText] = useState(message.text || '');
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [resolvedBlobUrl, setResolvedBlobUrl] = useState<string | null>(null);
+  const [videoPlayError, setVideoPlayError] = useState(false);
+  const [isTranslating, setIsTranslating] = useState(false);
   const [translationResult, setTranslationResult] = useState<{
     translated: string;
     pinyin?: string;
@@ -61,16 +63,38 @@ export const MessageItem: React.FC<MessageItemProps> = ({
 
   useEffect(() => {
     let active = true;
-    if (message.mediaUrl?.startsWith('vid_') || message.mediaUrl?.startsWith('local_media:')) {
-      const key = message.mediaUrl.replace('local_media:', '');
+    const mediaUrl = message.mediaUrl || '';
+
+    if (mediaUrl.startsWith('vid_') || mediaUrl.startsWith('local_media:')) {
+      const key = mediaUrl.replace('local_media:', '');
       getMediaBlobUrl(key).then((url) => {
         if (active && url) {
           setResolvedBlobUrl(url);
         }
       });
+
+      const handleBlobReady = (e: Event) => {
+        const detail = (e as CustomEvent).detail;
+        if (detail && detail.key === key) {
+          getMediaBlobUrl(key).then((url) => {
+            if (active && url) {
+              setResolvedBlobUrl(url);
+            }
+          });
+        }
+      };
+
+      window.addEventListener('ipin_media_blob_ready', handleBlobReady);
+      return () => {
+        active = false;
+        window.removeEventListener('ipin_media_blob_ready', handleBlobReady);
+      };
+    } else if (mediaUrl.startsWith('blob:') || mediaUrl.startsWith('http') || mediaUrl.startsWith('data:video/')) {
+      setResolvedBlobUrl(mediaUrl);
     } else {
       setResolvedBlobUrl(null);
     }
+
     return () => {
       active = false;
     };
@@ -110,13 +134,21 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     );
   };
 
-  const handleToggleTranslation = () => {
+  const handleToggleTranslation = async () => {
     if (!showTranslation) {
-      if (!translationResult && message.text) {
-        const res = translateText(message.text);
-        setTranslationResult({ translated: res.translated, pinyin: res.pinyin });
-      }
       setShowTranslation(true);
+      if (!translationResult && message.text) {
+        setIsTranslating(true);
+        try {
+          const res = await translateTextAsync(message.text);
+          setTranslationResult({ translated: res.translated, pinyin: res.pinyin });
+        } catch {
+          const fallback = translateText(message.text);
+          setTranslationResult({ translated: fallback.translated, pinyin: fallback.pinyin });
+        } finally {
+          setIsTranslating(false);
+        }
+      }
     } else {
       setShowTranslation(false);
     }
@@ -328,17 +360,83 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             )}
 
             {/* 2. PLAYABLE VIDEO (MP4, WebM) */}
-            {isVideo && !isLegacyVideo && message.mediaUrl && (
+            {isVideo && !isLegacyVideo && (
               <div className="rounded-2xl overflow-hidden max-w-sm bg-black relative">
-                <video
-                  src={resolvedBlobUrl || message.mediaUrl}
-                  controls
-                  playsInline
-                  className="max-h-72 w-full object-cover"
-                />
-                <div className="absolute top-2 right-2 px-2 py-0.5 rounded-md bg-black/60 text-[10px] text-white font-mono uppercase backdrop-blur-xs">
-                  {message.fileFormat?.toUpperCase() || 'MP4'}
-                </div>
+                {(() => {
+                  const poster = message.posterUrl || (message.mediaUrl?.startsWith('data:image/') ? message.mediaUrl : undefined);
+                  const validSrc = resolvedBlobUrl || (message.mediaUrl && !message.mediaUrl.startsWith('data:image/') && !message.mediaUrl.startsWith('local_media:') ? message.mediaUrl : null);
+
+                  if (videoPlayError) {
+                    return (
+                      <div className="p-4 bg-zinc-900 text-white flex flex-col items-center gap-2 text-center">
+                        <Film size={28} className="text-emerald-400" />
+                        <p className="text-xs font-semibold">{message.fileName || 'Video Attachment'}</p>
+                        <p className="text-[11px] text-zinc-400">{formatFileSize(message.fileSize)}</p>
+                        {validSrc && (
+                          <a
+                            href={validSrc}
+                            download={message.fileName || 'video.mp4'}
+                            className="mt-1 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md"
+                          >
+                            <Download size={13} />
+                            <span>Download & Play</span>
+                          </a>
+                        )}
+                      </div>
+                    );
+                  }
+
+                  if (validSrc) {
+                    return (
+                      <div className="relative group/vid">
+                        <video
+                          src={validSrc}
+                          poster={poster}
+                          controls
+                          playsInline
+                          preload="metadata"
+                          onError={() => setVideoPlayError(true)}
+                          className="max-h-72 w-full object-cover"
+                        />
+                        <div className="absolute top-2 right-2 px-2 py-0.5 rounded-md bg-black/60 text-[10px] text-white font-mono uppercase backdrop-blur-xs pointer-events-none">
+                          {message.fileFormat?.toUpperCase() || 'MP4'}
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  // If still resolving blob or has poster frame
+                  return (
+                    <div
+                      className="relative cursor-pointer group/vid"
+                      onClick={() => {
+                        onPreviewMedia({
+                          url: validSrc || poster || '',
+                          type: 'video',
+                          name: message.fileName,
+                          format: message.fileFormat,
+                          size: message.fileSize
+                        });
+                      }}
+                    >
+                      {poster ? (
+                        <img src={poster} alt="Video preview" className="max-h-72 w-full object-cover" />
+                      ) : (
+                        <div className="h-44 w-full flex items-center justify-center bg-zinc-900 text-zinc-400">
+                          <Film size={32} />
+                        </div>
+                      )}
+                      <div className="absolute inset-0 bg-black/40 flex flex-col items-center justify-center gap-1.5 text-white">
+                        <div className="w-11 h-11 rounded-full bg-emerald-600/90 flex items-center justify-center text-white shadow-lg group-hover/vid:scale-110 transition-transform">
+                          <Play size={20} fill="currentColor" className="ml-0.5" />
+                        </div>
+                        <span className="text-[11px] font-semibold bg-black/70 px-2 py-0.5 rounded-md">
+                          {message.fileName || 'Video'} • {formatFileSize(message.fileSize)}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
@@ -454,20 +552,29 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                     </p>
 
                     {/* Translation & Pinyin display */}
-                    {showTranslation && translationResult && (
+                    {showTranslation && (
                       <div
                         className={`mt-2 pt-2 border-t text-xs space-y-1 ${
                           isSelf ? 'border-white/20 text-emerald-100' : 'border-zinc-300 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300'
                         }`}
                       >
-                        {translationResult.pinyin && (
-                          <p className="font-mono text-[11px] opacity-90">
-                            <span className="font-semibold text-emerald-400">Pinyin:</span> {translationResult.pinyin}
-                          </p>
-                        )}
-                        <p className="font-medium italic">
-                          <span className="font-semibold text-emerald-400">Translation:</span> {translationResult.translated}
-                        </p>
+                        {isTranslating ? (
+                          <div className="flex items-center gap-1.5 py-1 text-emerald-400">
+                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                            <span className="text-[11px] font-semibold">Translating message...</span>
+                          </div>
+                        ) : translationResult ? (
+                          <>
+                            {translationResult.pinyin && (
+                              <p className="font-mono text-[11px] opacity-95">
+                                <span className="font-semibold text-emerald-400">Pinyin:</span> {translationResult.pinyin}
+                              </p>
+                            )}
+                            <p className="font-medium">
+                              <span className="font-semibold text-emerald-400">Translation:</span> {translationResult.translated}
+                            </p>
+                          </>
+                        ) : null}
                       </div>
                     )}
                   </>

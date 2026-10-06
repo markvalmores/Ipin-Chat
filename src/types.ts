@@ -63,6 +63,7 @@ export interface Message {
   senderPhoto?: string;
   text?: string;
   mediaUrl?: string;
+  posterUrl?: string;
   mediaType?: MediaType;
   fileName?: string;
   fileSize?: number;

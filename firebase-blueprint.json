@@ -65,6 +65,7 @@
         "senderPhoto": { "type": "string", "description": "Sender avatar" },
         "text": { "type": "string", "maxLength": 10000, "description": "Message text" },
         "mediaUrl": { "type": "string", "description": "Attached media URL or data" },
+        "posterUrl": { "type": "string", "description": "Thumbnail poster frame URL or base64" },
         "mediaType": { "type": "string", "enum": ["image", "video", "audio", "file", "none"], "description": "Media type" },
         "fileName": { "type": "string", "maxLength": 200, "description": "Attached file original name" },
         "fileSize": { "type": "number", "description": "Attached file size in bytes" },

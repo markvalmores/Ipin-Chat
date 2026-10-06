@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Download, FileText, ExternalLink, Play, Film } from 'lucide-react';
+import { getMediaBlobUrl } from '../utils/mediaStore';
 
 interface MediaPreviewModalProps {
   isOpen: boolean;
@@ -20,11 +21,31 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
   fileFormat,
   fileSize
 }) => {
+  const [resolvedUrl, setResolvedUrl] = useState<string>(mediaUrl);
+
+  useEffect(() => {
+    let active = true;
+    if (mediaUrl.startsWith('local_media:') || mediaUrl.startsWith('vid_')) {
+      const key = mediaUrl.replace('local_media:', '');
+      getMediaBlobUrl(key).then((url) => {
+        if (active && url) {
+          setResolvedUrl(url);
+        }
+      });
+    } else {
+      setResolvedUrl(mediaUrl);
+    }
+    return () => {
+      active = false;
+    };
+  }, [mediaUrl]);
+
   if (!isOpen) return null;
 
   const isVideo = mediaType === 'video' || ['mp4', 'webm', 'mov', 'm4v'].includes((fileFormat || '').toLowerCase());
   const isImage = mediaType === 'image' || ['png', 'gif', 'jpg', 'jpeg', 'bmp', 'apng', 'webp'].includes((fileFormat || '').toLowerCase());
   const isLegacyVideo = ['avi', 'flv', 'swf', 'wmv'].includes((fileFormat || '').toLowerCase());
+  const isPosterImage = resolvedUrl.startsWith('data:image/');
 
   const formatFileSize = (bytes?: number) => {
     if (!bytes) return '';
@@ -71,21 +92,34 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
 
       {/* Main content */}
       <div className="relative max-w-4xl max-h-[85vh] w-full flex items-center justify-center p-2">
-        {isImage && (
-          <img
-            src={mediaUrl}
-            alt={fileName || 'Attachment preview'}
-            referrerPolicy="no-referrer"
-            crossOrigin="anonymous"
-            className="max-w-full max-h-[80vh] object-contain rounded-2xl shadow-2xl"
-          />
+        {(isImage || (isVideo && isPosterImage)) && !resolvedUrl.startsWith('blob:') && !resolvedUrl.startsWith('data:video/') && (
+          <div className="relative">
+            <img
+              src={resolvedUrl}
+              alt={fileName || 'Attachment preview'}
+              referrerPolicy="no-referrer"
+              crossOrigin="anonymous"
+              className="max-w-full max-h-[80vh] object-contain rounded-2xl shadow-2xl"
+            />
+            {isVideo && (
+              <div className="absolute inset-0 bg-black/30 rounded-2xl flex flex-col items-center justify-center text-white gap-2">
+                <div className="w-16 h-16 rounded-full bg-emerald-600/90 flex items-center justify-center shadow-xl">
+                  <Play size={28} fill="currentColor" className="ml-1" />
+                </div>
+                <span className="text-xs font-semibold bg-black/60 px-3 py-1 rounded-full">
+                  {fileName || 'Video File'} • {formatFileSize(fileSize)}
+                </span>
+              </div>
+            )}
+          </div>
         )}
 
-        {isVideo && !isLegacyVideo && (
+        {isVideo && !isLegacyVideo && !isPosterImage && (
           <video
-            src={mediaUrl}
+            src={resolvedUrl}
             controls
             autoPlay
+            playsInline
             className="max-w-full max-h-[80vh] rounded-2xl shadow-2xl bg-black"
           />
         )}

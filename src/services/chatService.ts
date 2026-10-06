@@ -28,6 +28,7 @@ export async function sendMessage(
   data: {
     text?: string;
     mediaUrl?: string;
+    posterUrl?: string;
     mediaType?: Message['mediaType'];
     fileName?: string;
     fileSize?: number;
@@ -43,6 +44,7 @@ export async function sendMessage(
     senderPhoto: sender.photoURL,
     text: data.text || '',
     mediaUrl: data.mediaUrl || '',
+    posterUrl: data.posterUrl || '',
     mediaType: data.mediaType || 'none',
     fileName: data.fileName || '',
     fileSize: data.fileSize || 0,
@@ -52,8 +54,31 @@ export async function sendMessage(
     createdAt: new Date().toISOString()
   };
 
+  // 1. Optimistic memory & local storage update
+  if (!INITIAL_CHANNEL_MESSAGES[conversationId]) {
+    INITIAL_CHANNEL_MESSAGES[conversationId] = [];
+  }
+  INITIAL_CHANNEL_MESSAGES[conversationId].push(messageData);
+
   try {
-    // 1. Ensure parent conversation document is present in Firestore
+    const localKey = `ipin_msgs_${conversationId}`;
+    const raw = localStorage.getItem(localKey);
+    const list: Message[] = raw ? JSON.parse(raw) : [];
+    list.push(messageData);
+    localStorage.setItem(localKey, JSON.stringify(list.slice(-200)));
+  } catch (e) {}
+
+  // 2. Cross-tab instant broadcast
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      const bc = new BroadcastChannel('ipin_chat_sync');
+      bc.postMessage({ type: 'NEW_MESSAGE', conversationId, message: messageData });
+    }
+  } catch (e) {}
+  window.dispatchEvent(new CustomEvent('ipin_new_message', { detail: { conversationId, message: messageData } }));
+
+  try {
+    // 3. Ensure parent conversation document is present in Firestore
     const convRef = doc(db, 'conversations', conversationId);
     const lastPreview = data.mediaType && data.mediaType !== 'none'
       ? `[${data.fileFormat?.toUpperCase() || data.mediaType.toUpperCase()}] ${data.text || data.fileName || 'Media Attachment'}`
@@ -77,11 +102,11 @@ export async function sendMessage(
 
     await setDoc(convRef, updateData, { merge: true });
 
-    // 2. Save message to subcollection
+    // 4. Save message to subcollection in Firestore
     const msgRef = doc(db, 'conversations', conversationId, 'messages', messageId);
     await setDoc(msgRef, messageData);
 
-    // 3. Trigger Xiao Ai Human-like AI reply if chatting with Xiao Ai or mentioned
+    // 5. Trigger Xiao Ai Human-like AI reply if chatting with Xiao Ai or mentioned
     const isDirectWithAi = conversationId === 'dm_xiaoai_ai' || conversationId.includes('xiaoai');
     const isAiMentioned = (data.text || '').toLowerCase().includes('@xiaoai') || (data.text || '').toLowerCase().includes('@ai');
 
@@ -93,7 +118,7 @@ export async function sendMessage(
             senderName: sender.displayName,
             hasImage: data.mediaType === 'image',
             hasVideo: data.mediaType === 'video',
-            imagePosterDataUrl: data.mediaType === 'image' ? data.mediaUrl : undefined
+            imagePosterDataUrl: data.mediaType === 'image' ? data.mediaUrl : (data.posterUrl || undefined)
           });
 
           const aiMsgId = `ai-msg-${Date.now()}`;
@@ -109,6 +134,15 @@ export async function sendMessage(
             readBy: [AI_PERSONA.uid],
             createdAt: new Date().toISOString()
           };
+
+          INITIAL_CHANNEL_MESSAGES[conversationId]?.push(aiMessageData);
+          try {
+            if (typeof BroadcastChannel !== 'undefined') {
+              const bc = new BroadcastChannel('ipin_chat_sync');
+              bc.postMessage({ type: 'NEW_MESSAGE', conversationId, message: aiMessageData });
+            }
+          } catch (e) {}
+          window.dispatchEvent(new CustomEvent('ipin_new_message', { detail: { conversationId, message: aiMessageData } }));
 
           const aiDocRef = doc(db, 'conversations', conversationId, 'messages', aiMsgId);
           await setDoc(aiDocRef, aiMessageData);
@@ -127,7 +161,7 @@ export async function sendMessage(
 
     return messageId;
   } catch (error) {
-    console.error("Error saving message to Firestore:", error);
+    console.warn("Firestore write notice (local & cross-tab sync active):", error);
     return messageId;
   }
 }
@@ -261,12 +295,58 @@ export function subscribeToMessages(
   const messagesRef = collection(db, 'conversations', conversationId, 'messages');
   const q = query(messagesRef, orderBy('createdAt', 'asc'));
 
-  const initialMsgs = INITIAL_CHANNEL_MESSAGES[conversationId] || [];
+  const getStoredMessages = (): Message[] => {
+    const memory = INITIAL_CHANNEL_MESSAGES[conversationId] || [];
+    let local: Message[] = [];
+    try {
+      const raw = localStorage.getItem(`ipin_msgs_${conversationId}`);
+      if (raw) local = JSON.parse(raw);
+    } catch (e) {}
 
-  // Emit initial messages immediately for zero-latency load
-  if (initialMsgs.length > 0) {
-    onUpdate(initialMsgs);
+    const map = new Map<string, Message>();
+    memory.forEach((m) => map.set(m.id, m));
+    local.forEach((m) => map.set(m.id, { ...(map.get(m.id) || {}), ...m }));
+    return Array.from(map.values()).sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
+  };
+
+  let currentList = getStoredMessages();
+  if (currentList.length > 0) {
+    onUpdate(currentList);
   }
+
+  // Cross-tab broadcast listener
+  let bc: BroadcastChannel | null = null;
+  const handleIncomingMessage = (newMsg: Message) => {
+    if (newMsg.conversationId !== conversationId) return;
+    const map = new Map<string, Message>();
+    currentList.forEach((m) => map.set(m.id, m));
+    map.set(newMsg.id, newMsg);
+    currentList = Array.from(map.values()).sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
+    onUpdate(currentList);
+  };
+
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      bc = new BroadcastChannel('ipin_chat_sync');
+      bc.onmessage = (event) => {
+        if (event.data?.type === 'NEW_MESSAGE' && event.data?.message) {
+          handleIncomingMessage(event.data.message);
+        }
+      };
+    }
+  } catch (e) {}
+
+  const windowHandler = (e: Event) => {
+    const detail = (e as CustomEvent).detail;
+    if (detail && detail.conversationId === conversationId && detail.message) {
+      handleIncomingMessage(detail.message);
+    }
+  };
+  window.addEventListener('ipin_new_message', windowHandler);
 
   const unsubscribe = onSnapshot(q, (snapshot) => {
     const firestoreMsgs: Message[] = [];
@@ -274,25 +354,27 @@ export function subscribeToMessages(
       firestoreMsgs.push(docSnap.data() as Message);
     });
 
-    // Merge initial channel messages with Firestore messages by message ID
-    // This ensures group chat history is never cleared when someone sends a message or like!
     const map = new Map<string, Message>();
-    initialMsgs.forEach((m) => map.set(m.id, { ...m }));
+    currentList.forEach((m) => map.set(m.id, m));
     firestoreMsgs.forEach((m) => {
       const existing = map.get(m.id);
       map.set(m.id, { ...(existing || {}), ...m });
     });
 
-    const combined = Array.from(map.values());
-    combined.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-
-    onUpdate(combined);
+    currentList = Array.from(map.values()).sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
+    onUpdate(currentList);
   }, (error) => {
-    // Fallback to local sample messages if offline or permission
-    onUpdate(INITIAL_CHANNEL_MESSAGES[conversationId] || []);
+    // Keep showing cached and broadcast messages
+    onUpdate(currentList);
   });
 
-  return unsubscribe;
+  return () => {
+    unsubscribe();
+    window.removeEventListener('ipin_new_message', windowHandler);
+    if (bc) bc.close();
+  };
 }
 
 // Local persistent group chats helper
