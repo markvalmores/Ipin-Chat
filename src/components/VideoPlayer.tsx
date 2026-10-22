@@ -16,7 +16,10 @@ import {
   Zap,
   Loader2,
   Sliders,
-  PictureInPicture
+  PictureInPicture,
+  Scan,
+  Maximize2,
+  Minimize2
 } from 'lucide-react';
 import {
   formatTime,
@@ -35,9 +38,10 @@ interface VideoPlayerProps {
   fileSize?: number;
   autoPlay?: boolean;
   className?: string;
-  maxHeightClass?: string; // e.g. "max-h-72" or "max-h-[80vh]"
+  maxHeightClass?: string; // e.g. "max-h-72" or "max-h-[80dvh]"
   onDownload?: () => void;
   showEncoderBadge?: boolean;
+  initialFitMode?: 'contain' | 'cover';
 }
 
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
@@ -48,9 +52,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   fileSize = 0,
   autoPlay = false,
   className = '',
-  maxHeightClass = 'max-h-80',
+  maxHeightClass = 'max-h-[80dvh]',
   onDownload,
-  showEncoderBadge = true
+  showEncoderBadge = true,
+  initialFitMode = 'contain'
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -66,13 +71,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [isLooping, setIsLooping] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showControls, setShowControls] = useState(true);
-  const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
+  const [fitMode, setFitMode] = useState<'contain' | 'cover'>(initialFitMode);
 
   // Hover & Tooltip state for scrubber
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [hoverPosition, setHoverPosition] = useState<number>(0);
 
-  // Encoder API States
+  // Encoder API & Download States
   const [activeSrc, setActiveSrc] = useState<string>(src);
   const [activePoster, setActivePoster] = useState<string | undefined>(poster);
   const [isEncoding, setIsEncoding] = useState(false);
@@ -82,13 +87,40 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [showEncoderModal, setShowEncoderModal] = useState(false);
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
   const [videoError, setVideoError] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadSuccess, setDownloadSuccess] = useState(false);
 
-  // Sync prop changes
+  // Control bar auto-hide timer for touch & mouse
+  const controlsTimerRef = useRef<number | null>(null);
+
   useEffect(() => {
     setActiveSrc(src);
     setActivePoster(poster);
     setVideoError(false);
   }, [src, poster]);
+
+  const resetControlsTimer = () => {
+    setShowControls(true);
+    if (controlsTimerRef.current) {
+      window.clearTimeout(controlsTimerRef.current);
+    }
+    if (isPlaying) {
+      controlsTimerRef.current = window.setTimeout(() => {
+        setShowControls(false);
+      }, 3000);
+    }
+  };
+
+  // Listen for fullscreen change events natively
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, []);
 
   // Video Event Handlers
   const handleTimeUpdate = () => {
@@ -114,6 +146,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       e.stopPropagation();
       e.preventDefault();
     }
+    resetControlsTimer();
     const video = videoRef.current;
     if (!video) return;
 
@@ -121,16 +154,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       try {
         await video.play();
         setIsPlaying(true);
-        setHasPlayedOnce(true);
         setVideoError(false);
       } catch (err) {
-        // Fallback with mute if browser blocks unmuted play
         try {
           video.muted = true;
           setIsMuted(true);
           await video.play();
           setIsPlaying(true);
-          setHasPlayedOnce(true);
           setVideoError(false);
         } catch (innerErr) {
           console.error('Video play error:', innerErr);
@@ -143,13 +173,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   };
 
-  const handleScrub = (e: React.MouseEvent<HTMLDivElement>) => {
+  const handleScrub = (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
+    resetControlsTimer();
     const timeline = timelineRef.current;
     const video = videoRef.current;
     if (!timeline || !video || !duration) return;
 
     const rect = timeline.getBoundingClientRect();
-    const pos = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const pos = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     const targetTime = pos * duration;
 
     video.currentTime = targetTime;
@@ -171,6 +203,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   };
 
   const handleVolumeChange = (newVol: number) => {
+    resetControlsTimer();
     const video = videoRef.current;
     setVolume(newVol);
     if (video) {
@@ -186,6 +219,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   };
 
   const toggleMute = () => {
+    resetControlsTimer();
     const video = videoRef.current;
     if (!video) return;
     if (isMuted) {
@@ -199,6 +233,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   };
 
   const changeSpeed = (speed: number) => {
+    resetControlsTimer();
     setPlaybackSpeed(speed);
     if (videoRef.current) {
       videoRef.current.playbackRate = speed;
@@ -207,6 +242,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   };
 
   const toggleLoop = () => {
+    resetControlsTimer();
     const next = !isLooping;
     setIsLooping(next);
     if (videoRef.current) {
@@ -214,18 +250,38 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   };
 
-  const toggleFullscreen = () => {
+  const toggleFitMode = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    resetControlsTimer();
+    setFitMode((prev) => (prev === 'contain' ? 'cover' : 'contain'));
+  };
+
+  const toggleFullscreen = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    resetControlsTimer();
     const container = containerRef.current;
     if (!container) return;
 
     if (!document.fullscreenElement) {
-      container.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
+      if (container.requestFullscreen) {
+        container.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
+      } else if ((container as any).webkitRequestFullscreen) {
+        (container as any).webkitRequestFullscreen();
+        setIsFullscreen(true);
+      }
     } else {
-      document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {});
+      if (document.exitFullscreen) {
+        document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {});
+      } else if ((document as any).webkitExitFullscreen) {
+        (document as any).webkitExitFullscreen();
+        setIsFullscreen(false);
+      }
     }
   };
 
-  const togglePiP = async () => {
+  const togglePiP = async (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    resetControlsTimer();
     const video = videoRef.current;
     if (!video) return;
     try {
@@ -249,7 +305,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setEncodingPhase('Starting Video Encoder Pipeline...');
 
     try {
-      // Fetch source blob
       let sourceBlob: Blob;
       if (activeSrc.startsWith('data:')) {
         const res = await fetch(activeSrc);
@@ -261,7 +316,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       const result = await encodeVideoBlob(sourceBlob, {
         targetFormat: 'auto',
-        maxDimension: 1280, // 720p HD optimized
+        maxDimension: 1280,
         videoBitrate: 1800000,
         onProgress: (percent, phase) => {
           setEncodingProgress(percent);
@@ -287,34 +342,55 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   };
 
-  // 1-Click Download
-  const handleDownloadClick = (e: React.MouseEvent) => {
+  // 1-Click Download Video
+  const handleDownloadClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (onDownload) {
-      onDownload();
-      return;
+    resetControlsTimer();
+    if (isDownloading) return;
+
+    setIsDownloading(true);
+    setDownloadSuccess(false);
+
+    try {
+      if (onDownload) {
+        await onDownload();
+      } else {
+        await downloadMediaFile({
+          urlOrKey: activeSrc,
+          mediaUrl: activeSrc,
+          fileName,
+          fileFormat,
+          fileSize: encodedResult?.size || fileSize
+        });
+      }
+      setDownloadSuccess(true);
+      setTimeout(() => setDownloadSuccess(false), 3000);
+    } catch (err) {
+      console.error('Download error:', err);
+    } finally {
+      setIsDownloading(false);
     }
-    downloadMediaFile({
-      urlOrKey: activeSrc,
-      mediaUrl: activeSrc,
-      fileName,
-      fileFormat,
-      fileSize: encodedResult?.size || fileSize
-    });
   };
 
-  const formattedName = fileName.replace(/\.[^/.]+$/, '');
   const resolutionText = encodedResult?.resolutionLabel || getResolutionLabel(videoRef.current?.videoHeight || 720);
 
   return (
     <div
       ref={containerRef}
-      onMouseEnter={() => setShowControls(true)}
-      onMouseLeave={() => setShowControls(isPlaying ? false : true)}
-      className={`relative group/player rounded-2xl overflow-hidden bg-zinc-950 select-none shadow-xl border border-zinc-800/80 ${className}`}
+      onMouseMove={resetControlsTimer}
+      onTouchStart={resetControlsTimer}
+      className={`relative group/player rounded-2xl overflow-hidden bg-zinc-950 select-none shadow-2xl border border-zinc-800/80 w-full ${
+        isFullscreen ? 'fixed inset-0 z-50 rounded-none border-none max-h-none h-dvh' : 'max-w-full'
+      } ${className}`}
     >
-      {/* Video Media Canvas */}
-      <div className="relative w-full h-full flex items-center justify-center bg-black cursor-pointer" onClick={togglePlay}>
+      {/* Video Media Canvas Container */}
+      <div
+        className={`relative w-full flex items-center justify-center bg-black cursor-pointer overflow-hidden ${
+          isFullscreen ? 'h-dvh' : 'h-full'
+        }`}
+        onClick={togglePlay}
+        onDoubleClick={toggleFullscreen}
+      >
         <video
           ref={videoRef}
           src={activeSrc}
@@ -324,10 +400,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           autoPlay={autoPlay}
           onTimeUpdate={handleTimeUpdate}
           onLoadedMetadata={handleLoadedMetadata}
-          onPlay={() => setIsPlaying(true)}
-          onPause={() => setIsPlaying(false)}
+          onPlay={() => {
+            setIsPlaying(true);
+            resetControlsTimer();
+          }}
+          onPause={() => {
+            setIsPlaying(false);
+            setShowControls(true);
+          }}
           onError={() => setVideoError(true)}
-          className={`w-full h-full object-contain ${maxHeightClass}`}
+          className={`w-full transition-all duration-200 ${
+            fitMode === 'cover' ? 'object-cover h-full' : 'object-contain'
+          } ${isFullscreen ? 'max-h-dvh h-dvh' : maxHeightClass}`}
         />
 
         {/* Video Encoder Processing Overlay */}
@@ -343,7 +427,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               {encodingPhase || 'Transcoding video frames into H.264/WebM...'}
             </p>
 
-            {/* Encoding Progress Bar */}
             <div className="w-full max-w-xs bg-zinc-800 h-2.5 rounded-full overflow-hidden p-0.5 border border-zinc-700 mb-2">
               <div
                 className="bg-gradient-to-r from-emerald-500 to-teal-400 h-full rounded-full transition-all duration-200"
@@ -366,7 +449,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               <button
                 type="button"
                 onClick={handleReEncodeVideo}
-                className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md cursor-pointer"
+                className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md cursor-pointer"
               >
                 <Zap size={14} />
                 <span>⚡ Re-Encode Video</span>
@@ -374,10 +457,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               <button
                 type="button"
                 onClick={handleDownloadClick}
-                className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold flex items-center gap-1.5 cursor-pointer border border-zinc-700"
+                className="px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold flex items-center gap-1.5 cursor-pointer border border-zinc-700"
               >
-                <Download size={13} />
-                <span>Download</span>
+                <Download size={14} />
+                <span>Download Video</span>
               </button>
             </div>
           </div>
@@ -385,43 +468,74 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
         {/* Center Play Button Overlay (when paused) */}
         {!isPlaying && !isEncoding && !videoError && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/20 hover:bg-black/30 transition-colors">
-            <div className="w-14 h-14 rounded-full bg-emerald-600/90 hover:bg-emerald-500 text-white flex items-center justify-center shadow-2xl shadow-emerald-500/50 backdrop-blur-xs transform hover:scale-110 active:scale-95 transition-all">
-              <Play size={26} className="ml-1" />
+          <div className="absolute inset-0 flex items-center justify-center bg-black/25 hover:bg-black/35 transition-colors pointer-events-none">
+            <div className="w-16 h-16 sm:w-18 sm:h-18 rounded-full bg-emerald-600/90 hover:bg-emerald-500 text-white flex items-center justify-center shadow-2xl shadow-emerald-500/50 backdrop-blur-xs transform hover:scale-110 active:scale-95 transition-all">
+              <Play size={32} className="ml-1 fill-current" />
             </div>
           </div>
         )}
 
-        {/* Top Badges (Format Tag & Video Encoder Badge) */}
+        {/* Top Badges Header */}
         {showEncoderBadge && (
-          <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none z-10">
-            {/* Encoder Badge */}
+          <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none z-20">
+            {/* Encoder Spec Badge */}
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
                 setShowEncoderModal(true);
               }}
-              className="pointer-events-auto px-2.5 py-1 rounded-xl bg-black/60 hover:bg-black/80 backdrop-blur-md border border-emerald-500/30 text-emerald-300 font-medium text-[10px] flex items-center gap-1.5 shadow-md transition-all cursor-pointer"
+              className="pointer-events-auto px-2.5 py-1 rounded-xl bg-black/65 hover:bg-black/85 backdrop-blur-md border border-emerald-500/40 text-emerald-300 font-medium text-[10px] flex items-center gap-1.5 shadow-md transition-all cursor-pointer"
             >
               <Zap size={12} className="text-emerald-400" />
-              <span>{encodedResult ? 'Encoded (H.264/WebM)' : '⚡ Video Encoder API'}</span>
+              <span>{encodedResult ? 'Encoded H.264/WebM' : '⚡ Video Encoder'}</span>
               <span className="px-1 py-0.2 rounded bg-emerald-950/80 text-emerald-400 text-[9px] font-mono">
                 {resolutionText}
               </span>
             </button>
 
-            {/* Quick Format Badge */}
-            <div className="px-2 py-0.5 rounded-lg bg-black/60 text-[10px] text-zinc-300 font-mono uppercase backdrop-blur-xs">
-              {fileFormat.toUpperCase() || 'MP4'}
+            {/* Quick Fit Mode & Download Buttons in Header */}
+            <div className="pointer-events-auto flex items-center gap-1.5">
+              {/* Fit-to-View Toggle */}
+              <button
+                type="button"
+                onClick={toggleFitMode}
+                className="px-2 py-1 rounded-xl bg-black/65 hover:bg-black/85 backdrop-blur-md text-zinc-200 text-[10px] font-semibold flex items-center gap-1 border border-zinc-700 cursor-pointer"
+                title={fitMode === 'contain' ? 'Fit to View (100% visible)' : 'Fill Viewport (Cover)'}
+              >
+                <Scan size={12} className={fitMode === 'cover' ? 'text-emerald-400' : 'text-zinc-300'} />
+                <span className="hidden sm:inline">{fitMode === 'contain' ? 'Fit View' : 'Fill View'}</span>
+              </button>
+
+              {/* Top Download Video Button */}
+              <button
+                type="button"
+                onClick={handleDownloadClick}
+                disabled={isDownloading}
+                className={`px-2.5 py-1 rounded-xl border backdrop-blur-md text-[10px] font-bold flex items-center gap-1.5 cursor-pointer shadow-md transition-all ${
+                  downloadSuccess
+                    ? 'bg-emerald-600 text-white border-emerald-400'
+                    : 'bg-black/65 hover:bg-black/85 text-emerald-300 border-emerald-500/40'
+                }`}
+                title="Download Video File"
+              >
+                {isDownloading ? (
+                  <Loader2 size={12} className="animate-spin text-emerald-400" />
+                ) : downloadSuccess ? (
+                  <Check size={12} className="text-white" />
+                ) : (
+                  <Download size={12} />
+                )}
+                <span>{downloadSuccess ? 'Downloaded!' : 'Download'}</span>
+              </button>
             </div>
           </div>
         )}
       </div>
 
-      {/* Modern Player Controls Bar */}
+      {/* Responsive Player Controls Bar */}
       <div
-        className={`absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/90 via-black/60 to-transparent p-3 pt-6 flex flex-col gap-2 z-20 transition-opacity duration-300 ${
+        className={`absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/95 via-black/75 to-transparent p-3 sm:p-4 pt-8 flex flex-col gap-2 z-30 transition-opacity duration-300 ${
           showControls || !isPlaying ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       >
@@ -429,14 +543,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         <div
           ref={timelineRef}
           onClick={handleScrub}
+          onTouchStart={handleScrub}
+          onTouchMove={handleScrub}
           onMouseMove={handleTimelineMouseMove}
           onMouseLeave={handleTimelineMouseLeave}
-          className="relative h-3 w-full flex items-center cursor-pointer group/scrub"
+          className="relative h-4 w-full flex items-center cursor-pointer group/scrub touch-none"
         >
           {/* Hover Time Tooltip */}
           {hoverTime !== null && (
             <div
-              className="absolute -top-7 -translate-x-1/2 px-2 py-0.5 rounded bg-zinc-900 text-emerald-300 font-mono text-[10px] font-bold border border-emerald-500/40 shadow-md pointer-events-none"
+              className="absolute -top-7 -translate-x-1/2 px-2 py-0.5 rounded bg-zinc-900 text-emerald-300 font-mono text-[10px] font-bold border border-emerald-500/40 shadow-md pointer-events-none z-30"
               style={{ left: `${hoverPosition}%` }}
             >
               {formatTime(hoverTime)}
@@ -444,48 +560,46 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           )}
 
           {/* Track Background */}
-          <div className="h-1.5 w-full bg-zinc-700/80 rounded-full overflow-hidden relative group-hover/scrub:h-2 transition-all">
-            {/* Buffer Progress */}
+          <div className="h-1.5 sm:h-2 w-full bg-zinc-700/80 rounded-full overflow-hidden relative group-hover/scrub:h-2.5 transition-all">
             <div
               className="absolute top-0 bottom-0 left-0 bg-zinc-500/50 transition-all"
               style={{ width: `${duration ? (bufferedEnd / duration) * 100 : 0}%` }}
             />
-            {/* Current Played Progress */}
             <div
               className="absolute top-0 bottom-0 left-0 bg-gradient-to-r from-emerald-500 to-teal-400 transition-all"
               style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
             />
           </div>
 
-          {/* Scrubber Handle Knob */}
+          {/* Scrubber Knob */}
           <div
-            className="absolute w-3.5 h-3.5 rounded-full bg-white ring-2 ring-emerald-500 shadow-md -translate-x-1/2 opacity-0 group-hover/scrub:opacity-100 transition-opacity pointer-events-none"
+            className="absolute w-4 h-4 rounded-full bg-white ring-2 ring-emerald-500 shadow-md -translate-x-1/2 opacity-90 sm:opacity-0 group-hover/scrub:opacity-100 transition-opacity pointer-events-none"
             style={{ left: `${duration ? (currentTime / duration) * 100 : 0}%` }}
           />
         </div>
 
-        {/* Buttons & Time Row */}
-        <div className="flex items-center justify-between text-white text-xs">
+        {/* Buttons & Time Row - Designed to fit all screens */}
+        <div className="flex items-center justify-between text-white text-xs gap-2 flex-wrap sm:flex-nowrap">
           {/* Left Controls: Play, Volume, Time */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
             <button
               type="button"
               onClick={togglePlay}
-              className="p-1.5 rounded-lg hover:bg-white/10 text-white transition-colors cursor-pointer"
+              className="p-2 sm:p-1.5 rounded-xl hover:bg-white/15 active:bg-white/25 text-white transition-colors cursor-pointer"
               title={isPlaying ? 'Pause' : 'Play'}
             >
-              {isPlaying ? <Pause size={17} /> : <Play size={17} className="ml-0.5" />}
+              {isPlaying ? <Pause size={18} /> : <Play size={18} className="ml-0.5" />}
             </button>
 
-            {/* Volume Control Slider */}
-            <div className="flex items-center gap-1.5 group/vol">
+            {/* Volume Control */}
+            <div className="flex items-center gap-1 group/vol">
               <button
                 type="button"
                 onClick={toggleMute}
-                className="p-1 rounded-lg hover:bg-white/10 text-zinc-300 hover:text-white transition-colors cursor-pointer"
+                className="p-1.5 rounded-xl hover:bg-white/15 text-zinc-300 hover:text-white transition-colors cursor-pointer"
                 title={isMuted ? 'Unmute' : 'Mute'}
               >
-                {isMuted || volume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}
+                {isMuted || volume === 0 ? <VolumeX size={17} /> : <Volume2 size={17} />}
               </button>
               <input
                 type="range"
@@ -494,50 +608,60 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 step="0.05"
                 value={isMuted ? 0 : volume}
                 onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
-                className="w-14 h-1 bg-zinc-700 accent-emerald-500 rounded-lg cursor-pointer transition-all"
+                className="w-12 sm:w-16 h-1 bg-zinc-700 accent-emerald-500 rounded-lg cursor-pointer hidden xs:block"
               />
             </div>
 
             {/* Elapsed / Duration Time */}
-            <span className="font-mono text-[11px] text-zinc-300 font-medium">
+            <span className="font-mono text-[10px] sm:text-[11px] text-zinc-300 font-medium">
               {formatTime(currentTime)} / {formatTime(duration)}
             </span>
           </div>
 
-          {/* Right Controls: Encoder Action, Speed, Loop, PiP, Fullscreen, Download */}
-          <div className="flex items-center gap-1.5 relative">
+          {/* Right Controls: Fit Mode, Encoder, Speed, Loop, PiP, Fullscreen, Download */}
+          <div className="flex items-center gap-1 sm:gap-1.5 relative">
+            {/* Fit-to-View Toggle Button */}
+            <button
+              type="button"
+              onClick={toggleFitMode}
+              className="p-1.5 rounded-lg hover:bg-white/15 text-zinc-300 hover:text-white transition-colors cursor-pointer"
+              title={fitMode === 'contain' ? 'Fit Video Frame (Contain)' : 'Fill Viewport (Cover)'}
+            >
+              <Scan size={16} className={fitMode === 'cover' ? 'text-emerald-400' : 'text-zinc-300'} />
+            </button>
+
             {/* Re-Encode Action */}
             <button
               type="button"
               onClick={handleReEncodeVideo}
               disabled={isEncoding}
-              className="px-2 py-1 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 font-bold text-[11px] flex items-center gap-1 transition-all cursor-pointer"
+              className="px-2 py-1 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 font-bold text-[10px] sm:text-[11px] flex items-center gap-1 transition-all cursor-pointer"
               title="Re-encode and optimize video using Video Encoder API"
             >
               <Zap size={12} className="text-emerald-400" />
-              <span className="hidden sm:inline">Encoder</span>
+              <span className="hidden md:inline">Encode</span>
             </button>
 
-            {/* Playback Speed Menu */}
+            {/* Speed Selector */}
             <div className="relative">
               <button
                 type="button"
                 onClick={() => setShowSpeedMenu(!showSpeedMenu)}
-                className="px-2 py-1 rounded-lg hover:bg-white/10 text-zinc-300 hover:text-white font-mono text-[11px] transition-colors cursor-pointer"
+                className="px-1.5 py-1 rounded-lg hover:bg-white/15 text-zinc-300 hover:text-white font-mono text-[11px] transition-colors cursor-pointer"
                 title="Playback Speed"
               >
                 {playbackSpeed}x
               </button>
 
               {showSpeedMenu && (
-                <div className="absolute bottom-8 right-0 bg-zinc-900 border border-zinc-700 rounded-xl shadow-xl p-1 flex flex-col gap-0.5 z-30 min-w-[80px]">
+                <div className="absolute bottom-9 right-0 bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl p-1 flex flex-col gap-0.5 z-40 min-w-[85px]">
                   {[0.5, 1.0, 1.25, 1.5, 2.0].map((s) => (
                     <button
                       key={s}
                       type="button"
                       onClick={() => changeSpeed(s)}
-                      className={`px-3 py-1 rounded-lg text-xs font-mono text-left flex items-center justify-between hover:bg-zinc-800 transition-colors cursor-pointer ${
-                        playbackSpeed === s ? 'text-emerald-400 font-bold bg-emerald-950/40' : 'text-zinc-300'
+                      className={`px-3 py-1.5 rounded-lg text-xs font-mono text-left flex items-center justify-between hover:bg-zinc-800 transition-colors cursor-pointer ${
+                        playbackSpeed === s ? 'text-emerald-400 font-bold bg-emerald-950/50' : 'text-zinc-300'
                       }`}
                     >
                       <span>{s}x</span>
@@ -553,50 +677,58 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               type="button"
               onClick={toggleLoop}
               className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
-                isLooping ? 'bg-emerald-600 text-white' : 'hover:bg-white/10 text-zinc-400 hover:text-white'
+                isLooping ? 'bg-emerald-600 text-white' : 'hover:bg-white/15 text-zinc-400 hover:text-white'
               }`}
               title={isLooping ? 'Looping enabled' : 'Enable loop'}
             >
-              <RotateCcw size={15} />
+              <RotateCcw size={16} />
             </button>
 
             {/* PiP */}
             <button
               type="button"
               onClick={togglePiP}
-              className="p-1.5 rounded-lg hover:bg-white/10 text-zinc-400 hover:text-white transition-colors cursor-pointer"
+              className="p-1.5 rounded-lg hover:bg-white/15 text-zinc-400 hover:text-white transition-colors cursor-pointer hidden xs:block"
               title="Picture in Picture"
             >
-              <PictureInPicture size={15} />
+              <PictureInPicture size={16} />
             </button>
 
-            {/* Fullscreen */}
+            {/* Fullscreen Button */}
             <button
               type="button"
               onClick={toggleFullscreen}
-              className="p-1.5 rounded-lg hover:bg-white/10 text-zinc-400 hover:text-white transition-colors cursor-pointer"
-              title="Fullscreen"
+              className="p-2 sm:p-1.5 rounded-lg hover:bg-white/15 text-zinc-300 hover:text-white transition-colors cursor-pointer"
+              title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
             >
-              {isFullscreen ? <Minimize size={15} /> : <Maximize size={15} />}
+              {isFullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
             </button>
 
-            {/* Download Exact Video File */}
+            {/* Download Video Button */}
             <button
               type="button"
               onClick={handleDownloadClick}
-              className="p-1.5 rounded-lg hover:bg-white/10 text-emerald-400 hover:text-emerald-300 transition-colors cursor-pointer"
-              title="Download Encoded Video"
+              disabled={isDownloading}
+              className="px-2 py-1 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-bold text-xs flex items-center gap-1 shadow-md transition-all cursor-pointer"
+              title="Download Video File"
             >
-              <Download size={15} />
+              {isDownloading ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : downloadSuccess ? (
+                <Check size={13} />
+              ) : (
+                <Download size={13} />
+              )}
+              <span className="hidden xs:inline">{downloadSuccess ? 'Done' : 'Save'}</span>
             </button>
           </div>
         </div>
       </div>
 
-      {/* Video Encoder API Detailed Specs Modal */}
+      {/* Video Encoder Specs Modal */}
       {showEncoderModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-4 animate-in fade-in">
-          <div className="bg-zinc-900 border border-emerald-500/30 rounded-3xl w-full max-w-sm p-5 text-white shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in">
+          <div className="bg-zinc-900 border border-emerald-500/40 rounded-3xl w-full max-w-sm p-5 text-white shadow-2xl space-y-4">
             <div className="flex items-center justify-between pb-2 border-b border-zinc-800">
               <div className="flex items-center gap-2">
                 <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400">
@@ -622,8 +754,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 <span className="text-emerald-300 font-bold">{resolutionText}</span>
               </div>
               <div className="flex justify-between p-2 rounded-xl bg-zinc-800/80">
-                <span className="text-zinc-400">Codec & Mime</span>
-                <span className="text-zinc-200">{encodedResult?.codec || 'H.264 / VP8 / WebM'}</span>
+                <span className="text-zinc-400">Codec & Format</span>
+                <span className="text-zinc-200">{encodedResult?.codec || 'H.264 / VP8 / MP4'}</span>
               </div>
               <div className="flex justify-between p-2 rounded-xl bg-zinc-800/80">
                 <span className="text-zinc-400">Duration</span>
@@ -634,8 +766,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 <span className="text-zinc-200">{formatBytes(encodedResult?.size || fileSize)}</span>
               </div>
               <div className="flex justify-between p-2 rounded-xl bg-zinc-800/80">
-                <span className="text-zinc-400">Encoder Pipeline</span>
-                <span className="text-emerald-400 font-bold">Client Canvas + MediaRecorder</span>
+                <span className="text-zinc-400">Fit View Mode</span>
+                <span className="text-emerald-400 uppercase font-bold">{fitMode}</span>
               </div>
             </div>
 
