@@ -11,11 +11,14 @@ import {
   Languages,
   Film,
   Sparkles,
-  Square
+  Square,
+  Zap,
+  Loader2
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { translateText, translateTextAsync } from '../utils/translator';
 import { compressImageForUpload, captureVideoPoster, storeMediaBlob } from '../utils/mediaStore';
+import { encodeVideoBlob } from '../utils/videoEncoder';
 import { GifPickerModal } from './GifPickerModal';
 import { TenorGif } from '../services/tenorService';
 
@@ -227,18 +230,25 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           // Compress image so it never exceeds Firestore 1MB limits
           finalMediaUrl = await compressImageForUpload(selectedFile.file);
         } else if (selectedFile.type === 'video') {
-          const poster = await captureVideoPoster(selectedFile.file);
-          posterUrl = poster || undefined;
-          const mediaKey = `vid_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-          // Store full video blob into IndexedDB and broadcast to viewer tabs
-          await storeMediaBlob(mediaKey, selectedFile.file);
+          // Pass video through Video Encoder API to ensure universal H.264/WebM cross-device playback
+          const encoded = await encodeVideoBlob(selectedFile.file, {
+            targetFormat: 'auto',
+            maxDimension: 1280,
+            videoBitrate: 1800000
+          });
 
-          if (selectedFile.size < 600 * 1024) {
-            // Small video: embed dataUrl directly so all remote devices play instantly
+          posterUrl = encoded.posterUrl || (await captureVideoPoster(selectedFile.file)) || undefined;
+          const mediaKey = `vid_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+
+          // Store encoded video blob into IndexedDB and broadcast across all active tabs
+          await storeMediaBlob(mediaKey, encoded.blob);
+
+          if (encoded.blob.size < 600 * 1024) {
+            // Embed dataUrl directly for instant small video playback
             finalMediaUrl = await new Promise<string>((res) => {
               const reader = new FileReader();
               reader.onload = () => res(reader.result as string);
-              reader.readAsDataURL(selectedFile.file);
+              reader.readAsDataURL(encoded.blob);
             });
           } else {
             // Larger video: reference cross-tab synchronized blob key

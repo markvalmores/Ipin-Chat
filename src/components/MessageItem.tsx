@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Smile, Check, CheckCheck, Languages, Download, Play, FileText, Film, Volume2, Sparkles, Pencil, X, Trash2, CheckSquare, Maximize } from 'lucide-react';
+import { Smile, Check, CheckCheck, Languages, Download, Play, FileText, Film, Volume2, Sparkles, Pencil, X, Trash2, CheckSquare, Maximize, Zap } from 'lucide-react';
 import { Message, UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { toggleMessageReaction, editMessage } from '../services/chatService';
 import { translateText, translateTextAsync } from '../utils/translator';
 import { getMediaBlobUrl, downloadMediaFile } from '../utils/mediaStore';
+import { VideoPlayer } from './VideoPlayer';
 import { GifPickerModal } from './GifPickerModal';
 import { TenorGif } from '../services/tenorService';
 
@@ -359,98 +360,38 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               </div>
             )}
 
-            {/* 2. PLAYABLE VIDEO (MP4, WebM) */}
-            {isVideo && !isLegacyVideo && (
-              <div className="rounded-2xl overflow-hidden max-w-sm bg-black relative">
+            {/* 2. PLAYABLE ENCODED VIDEO PLAYER */}
+            {isVideo && (
+              <div className="rounded-2xl overflow-hidden max-w-sm bg-black relative my-1">
                 {(() => {
                   const poster = message.posterUrl || (message.mediaUrl?.startsWith('data:image/') ? message.mediaUrl : undefined);
                   const validSrc = resolvedBlobUrl || (message.mediaUrl && !message.mediaUrl.startsWith('data:image/') && !message.mediaUrl.startsWith('local_media:') ? message.mediaUrl : null);
 
-                  if (videoPlayError) {
-                    return (
-                      <div className="p-4 bg-zinc-900 text-white flex flex-col items-center gap-2 text-center">
-                        <Film size={28} className="text-emerald-400" />
-                        <p className="text-xs font-semibold">{message.fileName || 'Video Attachment'}</p>
-                        <p className="text-[11px] text-zinc-400">{formatFileSize(message.fileSize)}</p>
-                        {validSrc && (
-                          <button
-                            type="button"
-                            onClick={() => downloadMediaFile({
-                              urlOrKey: validSrc || message.mediaUrl || '',
-                              mediaUrl: message.mediaUrl,
-                              rawKey: message.mediaUrl?.replace(/^local_media:/, ''),
-                              fileName: message.fileName,
-                              fileFormat: message.fileFormat,
-                              fileSize: message.fileSize
-                            })}
-                            className="mt-1 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md cursor-pointer"
-                            title="Download exact video file"
-                          >
-                            <Download size={13} />
-                            <span>Download Exact Video</span>
-                          </button>
-                        )}
-                      </div>
-                    );
-                  }
-
                   if (validSrc) {
                     return (
-                      <div className="relative group/vid">
-                        <video
-                          src={validSrc}
-                          poster={poster}
-                          controls
-                          playsInline
-                          preload="metadata"
-                          onError={() => setVideoPlayError(true)}
-                          className="max-h-72 w-full object-cover"
-                        />
-                        <div className="absolute top-2 right-2 px-2 py-0.5 rounded-md bg-black/60 text-[10px] text-white font-mono uppercase backdrop-blur-xs pointer-events-none">
-                          {message.fileFormat?.toUpperCase() || 'MP4'}
-                        </div>
-                        {/* Download exact video file button */}
-                        <button
-                          type="button"
-                          onClick={() => downloadMediaFile({
-                            urlOrKey: validSrc || message.mediaUrl || '',
-                            mediaUrl: message.mediaUrl,
-                            rawKey: message.mediaUrl?.replace(/^local_media:/, ''),
-                            fileName: message.fileName,
-                            fileFormat: message.fileFormat,
-                            fileSize: message.fileSize
-                          })}
-                          className="absolute top-2 right-12 p-1.5 rounded-lg bg-black/60 hover:bg-black/80 text-white transition-colors cursor-pointer"
-                          title="Download exact video file"
-                        >
-                          <Download size={14} />
-                        </button>
-                        {/* Expand to fullscreen preview button */}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            onPreviewMedia({
-                              url: validSrc,
-                              type: 'video',
-                              name: message.fileName,
-                              format: message.fileFormat,
-                              size: message.fileSize,
-                              posterUrl: poster || message.posterUrl
-                            });
-                          }}
-                          className="absolute top-2 left-2 p-1.5 rounded-lg bg-black/60 hover:bg-black/80 text-white transition-colors cursor-pointer"
-                          title="Open Fullscreen Preview"
-                        >
-                          <Maximize size={14} />
-                        </button>
-                      </div>
+                      <VideoPlayer
+                        src={validSrc}
+                        poster={poster}
+                        fileName={message.fileName || 'Encoded_Video.mp4'}
+                        fileFormat={message.fileFormat || 'mp4'}
+                        fileSize={message.fileSize || 0}
+                        maxHeightClass="max-h-72"
+                        onDownload={() => downloadMediaFile({
+                          urlOrKey: validSrc || message.mediaUrl || '',
+                          mediaUrl: message.mediaUrl,
+                          rawKey: message.mediaUrl?.replace(/^local_media:/, ''),
+                          fileName: message.fileName,
+                          fileFormat: message.fileFormat,
+                          fileSize: message.fileSize
+                        })}
+                      />
                     );
                   }
 
-                  // If still resolving blob or has poster frame
+                  // If resolving blob key from local store
                   return (
                     <div
-                      className="relative cursor-pointer group/vid"
+                      className="relative cursor-pointer group/vid rounded-2xl overflow-hidden bg-zinc-900 border border-zinc-800 p-2"
                       onClick={async () => {
                         let finalSrc = validSrc;
                         if (!finalSrc && message.mediaUrl) {
@@ -461,82 +402,36 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                             finalSrc = url;
                           }
                         }
-                        onPreviewMedia({
-                          url: finalSrc || (message.mediaUrl && !message.mediaUrl.startsWith('data:image/') ? message.mediaUrl : '') || '',
-                          type: 'video',
-                          name: message.fileName,
-                          format: message.fileFormat,
-                          size: message.fileSize,
-                          posterUrl: poster || message.posterUrl
-                        });
+                        if (finalSrc) {
+                          onPreviewMedia({
+                            url: finalSrc,
+                            type: 'video',
+                            name: message.fileName,
+                            format: message.fileFormat,
+                            size: message.fileSize,
+                            posterUrl: poster || message.posterUrl
+                          });
+                        }
                       }}
                     >
                       {poster ? (
-                        <img src={poster} alt="Video preview" className="max-h-72 w-full object-cover" />
+                        <div className="relative">
+                          <img src={poster} alt="Video preview" className="max-h-72 w-full object-cover rounded-xl" />
+                          <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                            <div className="w-12 h-12 rounded-full bg-emerald-600/90 text-white flex items-center justify-center shadow-lg">
+                              <Play size={22} className="ml-0.5" />
+                            </div>
+                          </div>
+                        </div>
                       ) : (
-                        <div className="h-44 w-full flex items-center justify-center bg-zinc-900 text-zinc-400">
-                          <Film size={32} />
+                        <div className="h-44 w-full flex flex-col items-center justify-center bg-zinc-900 text-zinc-400 gap-2">
+                          <Film size={32} className="text-emerald-400 animate-pulse" />
+                          <span className="text-xs font-semibold text-emerald-300">Loading Encoded Video...</span>
                         </div>
                       )}
-                      <div className="absolute inset-0 bg-black/40 flex flex-col items-center justify-center gap-1.5 text-white">
-                        <div className="w-12 h-12 rounded-full bg-emerald-600/95 hover:bg-emerald-500 active:scale-90 flex items-center justify-center text-white shadow-xl group-hover/vid:scale-110 transition-transform">
-                          <Play size={24} fill="currentColor" className="ml-0.5" />
-                        </div>
-                        <span className="text-[11px] font-semibold bg-black/70 px-2.5 py-0.5 rounded-md">
-                          {message.fileName || 'Video'} • {formatFileSize(message.fileSize)}
-                        </span>
-                      </div>
                     </div>
                   );
                 })()}
-              </div>
-            )}
-
-            {/* 3. LEGACY / EXTENDED VIDEO CARD (AVI, FLV, SWF) */}
-            {isLegacyVideo && (
-              <div
-                className={`p-3.5 flex items-center gap-3 cursor-pointer rounded-2xl ${
-                  isSelf ? 'bg-emerald-700/40' : 'bg-zinc-200/60 dark:bg-zinc-700/40'
-                }`}
-                onClick={() =>
-                  onPreviewMedia({
-                    url: resolvedBlobUrl || message.mediaUrl || '',
-                    type: 'video',
-                    name: message.fileName,
-                    format: message.fileFormat,
-                    size: message.fileSize
-                  })
-                }
-              >
-                <div className="w-12 h-12 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
-                  <Film size={24} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-semibold truncate">{message.fileName || 'Video File'}</p>
-                  <div className="flex items-center gap-2 mt-0.5 text-[11px] opacity-80">
-                    <span className="font-mono uppercase font-bold text-emerald-400">{message.fileFormat}</span>
-                    <span>•</span>
-                    <span>{formatFileSize(message.fileSize)}</span>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    downloadMediaFile({
-                      urlOrKey: resolvedBlobUrl || message.mediaUrl || '',
-                      mediaUrl: message.mediaUrl,
-                      rawKey: message.mediaUrl?.replace(/^local_media:/, ''),
-                      fileName: message.fileName,
-                      fileFormat: message.fileFormat,
-                      fileSize: message.fileSize
-                    });
-                  }}
-                  className="p-2 rounded-full bg-white/20 hover:bg-white/30 text-white transition-colors cursor-pointer"
-                  title="Download exact video file"
-                >
-                  <Download size={14} />
-                </button>
               </div>
             )}
 
