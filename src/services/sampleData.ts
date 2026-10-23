@@ -106,7 +106,7 @@ export const DEMO_USERS: UserProfile[] = [
     displayName: 'Alex Carter',
     email: 'alex@ipin.chat',
     photoURL: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
-    bannerURL: 'https://assets.mixkit.co/videos/preview/mixkit-tree-branches-in-the-breeze-1188-large.mp4',
+    bannerURL: '/videos/california_redwoods_breeze.mp4',
     bannerType: 'video', // Demo MP4 profile banner!
     status: 'online',
     note: 'Building cross-border apps 💻✨',
@@ -169,7 +169,7 @@ export const INITIAL_STORIES: Story[] = [
     userId: 'demo_user_alex',
     userName: 'Alex Carter',
     userPhoto: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
-    mediaUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
+    mediaUrl: '/videos/california_redwoods_breeze.mp4',
     mediaType: 'video', // Demo video story!
     text: 'Morning breeze in California before team standup. Sending good vibes to Asia! 🌿',
     viewers: ['demo_user_meiling'],
@@ -261,6 +261,41 @@ export const INITIAL_CHANNEL_MESSAGES: Record<string, any[]> = {
       createdAt: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
       reactions: { 'demo_user_alex': '👍' },
       readBy: ['demo_user_meiling']
+    }
+  ],
+  'tech-shenzhen-silicon': [
+    {
+      id: 'msg-tech-1',
+      conversationId: 'tech-shenzhen-silicon',
+      senderId: 'demo_user_chenwei',
+      senderName: 'Chen Wei (陈伟)',
+      senderPhoto: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
+      text: 'Welcome to the Shenzhen ⇄ Silicon Valley hardware & video showcase! Here is the full HD video test stream:',
+      mediaUrl: '/assets/aistudio/SVID_20261023_102316_1_2f3ae485.mp4',
+      mediaType: 'video',
+      fileName: 'SVID_20261023_102316_1.mp4',
+      fileFormat: 'mp4',
+      fileSize: 12944732,
+      createdAt: new Date(Date.now() - 1000 * 60 * 40).toISOString(),
+      reactions: { 'demo_user_alex': '🔥', 'demo_user_meiling': '👏' },
+      readBy: ['demo_user_alex', 'demo_user_meiling']
+    },
+    {
+      id: 'msg-tech-2',
+      conversationId: 'tech-shenzhen-silicon',
+      senderId: 'demo_user_alex',
+      senderName: 'Alex Carter',
+      senderPhoto: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
+      text: 'And here is the California Redwoods clip for quick playback and download testing:',
+      mediaUrl: '/videos/california_redwoods_breeze.mp4',
+      posterUrl: '/videos/california_redwoods_poster.jpg',
+      mediaType: 'video',
+      fileName: 'california_redwoods_breeze.mp4',
+      fileFormat: 'mp4',
+      fileSize: 87364,
+      createdAt: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
+      reactions: { 'demo_user_chenwei': '👍' },
+      readBy: ['demo_user_chenwei']
     }
   ]
 };

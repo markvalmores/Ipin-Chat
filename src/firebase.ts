@@ -21,6 +21,7 @@ try {
     app,
     {
       experimentalAutoDetectLongPolling: true,
+      ignoreUndefinedProperties: true,
       localCache: persistentLocalCache({
         tabManager: persistentMultipleTabManager()
       })
@@ -32,7 +33,8 @@ try {
     firestoreDb = initializeFirestore(
       app,
       {
-        experimentalAutoDetectLongPolling: true
+        experimentalAutoDetectLongPolling: true,
+        ignoreUndefinedProperties: true
       },
       databaseId
     );

@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, ChevronLeft, ChevronRight, Send, Heart, Flame, Sparkles, Smile, Clock, Trash2, Eye } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, Send, Heart, Flame, Sparkles, Smile, Clock, Trash2, Eye, Volume2, VolumeX } from 'lucide-react';
 import { Story, UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { markStoryViewed, sendMessage, getOrCreateDirectConversation, deleteStory } from '../services/chatService';
+import { getMediaBlobUrl } from '../utils/mediaStore';
 
 interface StoryViewerModalProps {
   isOpen: boolean;
@@ -32,16 +33,54 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [progress, setProgress] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
+  const [isMuted, setIsMuted] = useState(true);
+  const [resolvedVideoUrl, setResolvedVideoUrl] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
   const [isSendingReply, setIsSendingReply] = useState(false);
   const [feedbackToast, setFeedbackToast] = useState<string | null>(null);
 
   const currentStory = stories[currentIndex];
   const timerRef = useRef<number | null>(null);
+  const storyVideoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
     setCurrentIndex(initialIndex);
   }, [initialIndex]);
+
+  // Resolve video story URL (supports shared_media:, local_media:, local_mp4:, or direct URLs)
+  useEffect(() => {
+    let active = true;
+    if (!currentStory || currentStory.mediaType !== 'video') {
+      setResolvedVideoUrl(null);
+      return;
+    }
+
+    const rawUrl = currentStory.mediaUrl || '';
+    if (
+      rawUrl.startsWith('shared_media:') ||
+      rawUrl.startsWith('local_media:') ||
+      rawUrl.startsWith('local_mp4:')
+    ) {
+      const cleanKey = rawUrl.replace(/^local_mp4:/, '');
+      getMediaBlobUrl(cleanKey, { isVideo: true }).then((url) => {
+        if (active) {
+          setResolvedVideoUrl(url || '/videos/california_redwoods_breeze.mp4');
+        }
+      });
+    } else if (
+      rawUrl.includes('commondatastorage.googleapis.com') ||
+      rawUrl.includes('assets.mixkit.co') ||
+      !rawUrl
+    ) {
+      setResolvedVideoUrl('/videos/california_redwoods_breeze.mp4');
+    } else {
+      setResolvedVideoUrl(rawUrl);
+    }
+
+    return () => {
+      active = false;
+    };
+  }, [currentStory?.id, currentStory?.mediaUrl, currentStory?.mediaType]);
 
   // Mark viewed
   useEffect(() => {
@@ -209,6 +248,19 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
             </div>
 
             <div className="flex items-center gap-1.5">
+              {currentStory.mediaType === 'video' && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsMuted((prev) => !prev);
+                  }}
+                  className="p-1.5 rounded-full bg-black/50 hover:bg-black/70 text-white backdrop-blur-md transition-colors"
+                  title={isMuted ? 'Unmute video' : 'Mute video'}
+                >
+                  {isMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+                </button>
+              )}
               {profile && profile.uid === currentStory.userId && (
                 <button
                   type="button"
@@ -238,10 +290,18 @@ export const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
 
           {currentStory.mediaType === 'video' && (
             <video
-              src={currentStory.mediaUrl}
+              ref={storyVideoRef}
+              key={resolvedVideoUrl || currentStory.mediaUrl}
+              src={resolvedVideoUrl || '/videos/california_redwoods_breeze.mp4'}
               autoPlay
               playsInline
+              muted={isMuted}
               loop
+              onError={() => {
+                if (resolvedVideoUrl !== '/videos/california_redwoods_breeze.mp4') {
+                  setResolvedVideoUrl('/videos/california_redwoods_breeze.mp4');
+                }
+              }}
               className="w-full h-full object-cover"
             />
           )}

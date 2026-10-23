@@ -16,12 +16,18 @@ export const ChatWallpaperView: React.FC<ChatWallpaperViewProps> = ({
   wallpaperBlur = 0
 }) => {
   const [resolvedBlobUrl, setResolvedBlobUrl] = useState<string | null>(null);
+  const [fallbackVideoUrl, setFallbackVideoUrl] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
-    if (wallpaperURL?.startsWith('local_mp4:')) {
-      const key = wallpaperURL.replace('local_mp4:', '');
-      getMediaBlobUrl(key).then((url) => {
+    setFallbackVideoUrl(null);
+    if (
+      wallpaperURL?.startsWith('local_mp4:') ||
+      wallpaperURL?.startsWith('shared_media:') ||
+      wallpaperURL?.startsWith('local_media:')
+    ) {
+      const key = wallpaperURL.replace(/^local_mp4:/, '');
+      getMediaBlobUrl(key, { isVideo: true }).then((url) => {
         if (active && url) {
           setResolvedBlobUrl(url);
         }
@@ -45,7 +51,12 @@ export const ChatWallpaperView: React.FC<ChatWallpaperViewProps> = ({
     wallpaperURL.endsWith('.mp4') ||
     wallpaperURL.includes('.mp4?') ||
     wallpaperURL.startsWith('blob:') ||
-    wallpaperURL.startsWith('data:video/');
+    wallpaperURL.startsWith('data:video/') ||
+    wallpaperURL.startsWith('shared_media:') ||
+    wallpaperURL.startsWith('local_media:') ||
+    wallpaperURL.startsWith('local_mp4:');
+
+  const effectiveVideoSrc = fallbackVideoUrl || resolvedBlobUrl || (wallpaperURL.startsWith('shared_media:') ? '/videos/california_redwoods_breeze.mp4' : wallpaperURL);
 
   return (
     <div
@@ -72,11 +83,17 @@ export const ChatWallpaperView: React.FC<ChatWallpaperViewProps> = ({
       {!isYouTube && isVideo && (
         <div className="absolute inset-0 overflow-hidden bg-black">
           <video
-            src={resolvedBlobUrl || wallpaperURL}
+            key={effectiveVideoSrc}
+            src={effectiveVideoSrc}
             autoPlay
             loop
             muted
             playsInline
+            onError={() => {
+              if (effectiveVideoSrc !== '/videos/california_redwoods_breeze.mp4') {
+                setFallbackVideoUrl('/videos/california_redwoods_breeze.mp4');
+              }
+            }}
             className="w-full h-full object-cover pointer-events-none"
           />
         </div>

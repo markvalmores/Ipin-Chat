@@ -17,6 +17,7 @@ import { useAuth } from '../context/AuthContext';
 import { searchUsersByName, subscribeToAllUsers } from '../services/chatService';
 import { BannerMedia } from './BannerMedia';
 import { isYouTubeUrl } from '../utils/youtube';
+import { isUserOnline } from '../utils/conversationHelper';
 
 interface SearchAccountsModalProps {
   isOpen: boolean;
@@ -141,7 +142,7 @@ export const SearchAccountsModal: React.FC<SearchAccountsModalProps> = ({
             </div>
           ) : (
             results.map((user) => {
-              const isOnline = activePresences.some((p) => p.uid === user.uid && p.isOnline);
+              const isOnline = isUserOnline(user, activePresences, allUsers);
 
               return (
                 <div

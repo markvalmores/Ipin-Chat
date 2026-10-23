@@ -41,8 +41,8 @@ export async function sendMessage(
     id: messageId,
     conversationId,
     senderId: sender.uid,
-    senderName: sender.displayName,
-    senderPhoto: sender.photoURL,
+    senderName: sender.displayName || 'User',
+    senderPhoto: sender.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${sender.uid}`,
     text: data.text || '',
     mediaUrl: data.mediaUrl || '',
     posterUrl: data.posterUrl || '',
@@ -90,7 +90,7 @@ export async function sendMessage(
       const updateData: Record<string, any> = {
         id: conversationId,
         lastMessageText: lastPreview,
-        lastMessageSender: sender.displayName,
+        lastMessageSender: sender.displayName || 'User',
         lastMessageTime: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -99,17 +99,26 @@ export async function sendMessage(
         updateData.type = defaultChannel.type;
         updateData.title = defaultChannel.title;
         updateData.avatar = defaultChannel.avatar;
+      } else if (conversationId.includes('_dm_')) {
+        const dmParts = conversationId.split('_dm_').filter(Boolean);
+        updateData.type = 'direct';
+        updateData.participantIds = Array.from(new Set([...dmParts, sender.uid]));
+        updateData[`participantData.${sender.uid}`] = {
+          displayName: sender.displayName || 'User',
+          photoURL: sender.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${sender.uid}`,
+          location: sender.location || 'Global Bridge 🌏'
+        };
       }
 
       await Promise.race([
         setDoc(convRef, updateData, { merge: true }),
-        new Promise((_, r) => setTimeout(() => r(new Error('sync timeout')), 6000))
+        new Promise((_, r) => setTimeout(() => r(new Error('sync timeout')), 8000))
       ]);
 
       const msgRef = doc(db, 'conversations', conversationId, 'messages', messageId);
       await Promise.race([
         setDoc(msgRef, messageData),
-        new Promise((_, r) => setTimeout(() => r(new Error('sync timeout')), 6000))
+        new Promise((_, r) => setTimeout(() => r(new Error('sync timeout')), 8000))
       ]);
     } catch (err) {
       console.warn('Firestore message sync notice:', err);
@@ -408,9 +417,27 @@ function saveLocalGroupChat(gc: Conversation) {
 // Subscribe to conversations list
 export function subscribeToConversations(
   currentUserId: string,
-  onUpdate: (conversations: Conversation[]) => void
+  onUpdate: (conversations: Conversation[]) => void,
+  currentUserName?: string
 ) {
   const convsRef = collection(db, 'conversations');
+  const lowerCurrentName = (currentUserName || '').trim().toLowerCase();
+
+  const isUserParticipant = (c: Conversation): boolean => {
+    if (c.type === 'group') return true;
+    if (c.participantIds && c.participantIds.includes(currentUserId)) return true;
+    if (c.id && c.id.includes(currentUserId)) return true;
+    if (lowerCurrentName && lowerCurrentName !== 'user' && lowerCurrentName !== 'ipin user') {
+      if ((c.title || '').trim().toLowerCase() === lowerCurrentName) return true;
+      if (c.participantData) {
+        const matchedByName = Object.values(c.participantData).some(
+          (p) => (p?.displayName || '').trim().toLowerCase() === lowerCurrentName
+        );
+        if (matchedByName) return true;
+      }
+    }
+    return false;
+  };
 
   const emitMerged = (firestoreList: Conversation[] = []) => {
     const localList = getLocalGroupChats();
@@ -421,14 +448,14 @@ export function subscribeToConversations(
 
     // 2. Local custom group chats
     localList.forEach((c) => {
-      if (c.type === 'group' || (c.participantIds && c.participantIds.includes(currentUserId))) {
+      if (isUserParticipant(c)) {
         map.set(c.id, { ...(map.get(c.id) || {}), ...c });
       }
     });
 
     // 3. Firestore conversations
     firestoreList.forEach((c) => {
-      if (c.type === 'group' || (c.participantIds && c.participantIds.includes(currentUserId))) {
+      if (isUserParticipant(c)) {
         map.set(c.id, { ...(map.get(c.id) || {}), ...c });
       }
     });
@@ -1089,47 +1116,102 @@ export async function getOrCreateDirectConversation(
   const directId = [currentUser.uid, otherUser.uid].sort().join('_dm_');
   const convRef = doc(db, 'conversations', directId);
 
+  const safeParticipantData = {
+    [currentUser.uid]: {
+      displayName: currentUser.displayName || 'User',
+      photoURL: currentUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${currentUser.uid}`,
+      location: currentUser.location || 'Global Bridge 🌏'
+    },
+    [otherUser.uid]: {
+      displayName: otherUser.displayName || 'Friend',
+      photoURL: otherUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${otherUser.uid}`,
+      location: otherUser.location || 'Global Bridge 🌏'
+    }
+  };
+
   try {
     const snap = await getDoc(convRef);
     if (snap.exists()) {
-      return snap.data() as Conversation;
+      const existing = snap.data() as Conversation;
+      const mergedParticipants = Array.from(
+        new Set([...(existing.participantIds || []), currentUser.uid, otherUser.uid])
+      );
+      const updatedConv: Conversation = {
+        ...existing,
+        id: directId,
+        type: 'direct',
+        participantIds: mergedParticipants,
+        participantData: {
+          ...(existing.participantData || {}),
+          ...safeParticipantData
+        }
+      };
+      await setDoc(convRef, updatedConv, { merge: true });
+      return updatedConv;
+    }
+
+    // Check if a direct conversation already exists between these two users by displayName/UID
+    const myName = (currentUser.displayName || '').trim().toLowerCase();
+    const otherName = (otherUser.displayName || '').trim().toLowerCase();
+    if (myName && otherName) {
+      try {
+        const qDirect = query(collection(db, 'conversations'), where('type', '==', 'direct'));
+        const qSnap = await getDocs(qDirect);
+        let matchedConv: Conversation | null = null;
+        qSnap.forEach((d) => {
+          const c = d.data() as Conversation;
+          if (!c.participantData) return;
+          const names = Object.values(c.participantData).map((p) => (p?.displayName || '').trim().toLowerCase());
+          if (names.includes(myName) && names.includes(otherName)) {
+            matchedConv = c;
+          }
+        });
+        if (matchedConv) {
+          const found = matchedConv as Conversation;
+          const matchedRef = doc(db, 'conversations', found.id);
+          const mergedParticipants = Array.from(
+            new Set([...(found.participantIds || []), currentUser.uid, otherUser.uid])
+          );
+          const unifiedConv: Conversation = {
+            ...found,
+            participantIds: mergedParticipants,
+            participantData: {
+              ...(found.participantData || {}),
+              ...safeParticipantData
+            },
+            updatedAt: new Date().toISOString()
+          };
+          await setDoc(matchedRef, unifiedConv, { merge: true });
+          return unifiedConv;
+        }
+      } catch (e) {}
     }
 
     const newConv: Conversation = {
       id: directId,
       type: 'direct',
-      title: otherUser.displayName,
-      avatar: otherUser.photoURL,
+      title: otherUser.displayName || 'Friend',
+      avatar: otherUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${otherUser.uid}`,
       participantIds: [currentUser.uid, otherUser.uid],
-      participantData: {
-        [currentUser.uid]: {
-          displayName: currentUser.displayName,
-          photoURL: currentUser.photoURL,
-          location: currentUser.location
-        },
-        [otherUser.uid]: {
-          displayName: otherUser.displayName,
-          photoURL: otherUser.photoURL,
-          location: otherUser.location
-        }
-      },
+      participantData: safeParticipantData,
       lastMessageText: 'Started conversation',
-      lastMessageSender: currentUser.displayName,
+      lastMessageSender: currentUser.displayName || 'User',
       lastMessageTime: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       createdAt: new Date().toISOString()
     };
 
-    await setDoc(convRef, newConv);
+    await setDoc(convRef, newConv, { merge: true });
 
     // Also seed a friendly initial message into the subcollection
-    const initMsgRef = doc(db, 'conversations', directId, 'messages', `init-${Date.now()}`);
+    const initMsgId = `init-${Date.now()}`;
+    const initMsgRef = doc(db, 'conversations', directId, 'messages', initMsgId);
     await setDoc(initMsgRef, {
-      id: `init-${Date.now()}`,
+      id: initMsgId,
       conversationId: directId,
       senderId: currentUser.uid,
-      senderName: currentUser.displayName,
-      senderPhoto: currentUser.photoURL,
+      senderName: currentUser.displayName || 'User',
+      senderPhoto: currentUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${currentUser.uid}`,
       text: `👋 Started a direct chat on ipin Messenger!`,
       mediaType: 'none',
       reactions: {},
@@ -1139,12 +1221,14 @@ export async function getOrCreateDirectConversation(
 
     return newConv;
   } catch (err) {
+    console.warn('Direct conversation creation notice:', err);
     return {
       id: directId,
       type: 'direct',
-      title: otherUser.displayName,
-      avatar: otherUser.photoURL,
+      title: otherUser.displayName || 'Friend',
+      avatar: otherUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${otherUser.uid}`,
       participantIds: [currentUser.uid, otherUser.uid],
+      participantData: safeParticipantData,
       lastMessageText: 'Direct conversation',
       lastMessageTime: new Date().toISOString(),
       updatedAt: new Date().toISOString()

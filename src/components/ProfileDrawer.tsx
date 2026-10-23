@@ -21,7 +21,7 @@ import { useAuth } from '../context/AuthContext';
 import { DEMO_USERS } from '../services/sampleData';
 import { BannerMedia } from './BannerMedia';
 import { isYouTubeUrl, extractYouTubeId } from '../utils/youtube';
-import { storeMediaBlob, compressImageForUpload } from '../utils/mediaStore';
+import { storeMediaBlob, storeSharedMediaToCloud, compressImageForUpload } from '../utils/mediaStore';
 
 interface ProfileDrawerProps {
   isOpen: boolean;
@@ -88,7 +88,7 @@ export const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
     if (isVideoFile) {
       // Real MP4 video file uploaded from user device!
       const objectUrl = URL.createObjectURL(file);
-      await storeMediaBlob(`user_banner_video_${profile.uid}`, file);
+      await storeSharedMediaToCloud(`user_banner_video_${profile.uid}`, file);
       setBannerURL(objectUrl);
       setBannerType('video');
       setFeedback('Device MP4 video loaded! Click "Save Profile" to apply your motion banner.');
@@ -112,9 +112,9 @@ export const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
         ? 'youtube'
         : bannerType;
 
-      // If user uploaded a local device MP4 file, reference it safely
+      // If user uploaded a local device MP4 file, reference it safely via shared_media
       if (finalBannerType === 'video' && finalBannerURL.startsWith('blob:')) {
-        finalBannerURL = `local_mp4:user_banner_video_${profile.uid}`;
+        finalBannerURL = `shared_media:user_banner_video_${profile.uid}`;
       }
 
       await updateProfileData({
@@ -421,12 +421,12 @@ export const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      setBannerURL('https://www.youtube.com/watch?v=V-_O7nl0Ii0');
-                      setBannerType('youtube');
+                      setBannerURL('/videos/california_redwoods_breeze.mp4');
+                      setBannerType('video');
                     }}
-                    className="px-2 py-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-[10px] text-zinc-700 dark:text-zinc-300 hover:bg-emerald-100 dark:hover:bg-emerald-950/60 transition-colors"
+                    className="px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/60 text-[10px] text-emerald-700 dark:text-emerald-300 hover:bg-emerald-200 transition-colors"
                   >
-                    ⚡️ Night City
+                    🌲 Redwoods MP4
                   </button>
                 </div>
 

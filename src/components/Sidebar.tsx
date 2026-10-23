@@ -20,7 +20,7 @@ import { useAuth } from '../context/AuthContext';
 import { StoryBar } from './StoryBar';
 import { DEMO_USERS } from '../services/sampleData';
 import { subscribeToAllUsers } from '../services/chatService';
-import { getConversationDisplay } from '../utils/conversationHelper';
+import { getConversationDisplay, isUserOnline } from '../utils/conversationHelper';
 
 interface SidebarProps {
   conversations: Conversation[];
@@ -391,7 +391,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             ) : (
               <div className="space-y-1.5">
                 {matchingAccounts.slice(0, 4).map((account) => {
-                  const isOnline = activePresences.some((p) => p.uid === account.uid && p.isOnline);
+                  const isOnline = isUserOnline(account, activePresences, registeredUsers);
                   return (
                     <div
                       key={account.uid}
@@ -446,7 +446,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             const isGroup = conv.type === 'group';
             const displayInfo = getConversationDisplay(conv, profile?.uid, registeredUsers);
             const isOtherOnline = displayInfo.otherUser
-              ? activePresences.some((p) => p.uid === displayInfo.otherUser!.uid && p.isOnline)
+              ? isUserOnline(displayInfo.otherUser, activePresences, registeredUsers)
               : true;
 
             return (

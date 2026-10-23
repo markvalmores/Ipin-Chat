@@ -18,6 +18,7 @@ export interface UserProfile {
 export interface ActivePresence {
   uid: string;
   displayName: string;
+  email?: string;
   photoURL?: string;
   lastActive: string;
   isOnline: boolean;

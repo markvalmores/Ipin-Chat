@@ -34,7 +34,7 @@ import {
   getConversationWallpaper,
   ChatWallpaperSettings
 } from '../services/chatService';
-import { getConversationDisplay } from '../utils/conversationHelper';
+import { getConversationDisplay, isUserOnline } from '../utils/conversationHelper';
 import { DEMO_USERS } from '../services/sampleData';
 import { MessageItem } from './MessageItem';
 import { MessageInput } from './MessageInput';
@@ -227,7 +227,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   const displayInfo = getConversationDisplay(conversation, profile?.uid, allUsers);
   const otherUser = displayInfo.otherUser;
-  const isOtherUserOnline = otherUser ? activePresences.some((p) => p.uid === otherUser.uid && p.isOnline) : true;
+  const hasRecentMessageFromOther = otherUser
+    ? messages.some(
+        (m) =>
+          (m.senderId === otherUser.uid ||
+            (m.senderName || '').trim().toLowerCase() === (otherUser.displayName || '').trim().toLowerCase()) &&
+          Math.abs(Date.now() - new Date(m.createdAt).getTime()) < 15 * 60 * 1000
+      )
+    : false;
+  const isOtherUserOnline = otherUser
+    ? isUserOnline(otherUser, activePresences, allUsers) || hasRecentMessageFromOther
+    : true;
 
   const handleOpenHeaderProfile = () => {
     if (otherUser) {
@@ -754,7 +764,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         user={inspectedUser}
         isOpen={isProfileModalOpen}
         isOnline={
-          inspectedUser ? activePresences.some((p) => p.uid === inspectedUser.uid && p.isOnline) : false
+          inspectedUser ? isUserOnline(inspectedUser, activePresences, allUsers) : false
         }
         onClose={() => setIsProfileModalOpen(false)}
         onStartChat={(u) => {

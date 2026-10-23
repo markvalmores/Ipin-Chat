@@ -20,6 +20,7 @@ import { useAuth } from '../context/AuthContext';
 import { DEMO_USERS } from '../services/sampleData';
 import { addMembersToGroupChat, removeMemberFromGroupChat } from '../services/chatService';
 import { AddGroupMembersModal } from './AddGroupMembersModal';
+import { isUserOnline } from '../utils/conversationHelper';
 
 interface ChannelMembersDrawerProps {
   conversation: Conversation;
@@ -63,7 +64,7 @@ export const ChannelMembersDrawer: React.FC<ChannelMembersDrawerProps> = ({
   participantIds.forEach((uid) => {
     const user = allUsersMap.get(uid);
     if (user) {
-      const isOnline = activePresences.some((p) => p.uid === uid && p.isOnline);
+      const isOnline = isUserOnline(user, activePresences, registeredUsers);
       members.push({
         ...user,
         isCreator: uid === creatorId,

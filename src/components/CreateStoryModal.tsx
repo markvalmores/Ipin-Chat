@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { X, Image as ImageIcon, Video, Type, Upload, Sparkles, Clock, Check } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { createStory } from '../services/chatService';
-import { compressImageForUpload, storeMediaBlob } from '../utils/mediaStore';
+import { compressImageForUpload, storeSharedMediaToCloud } from '../utils/mediaStore';
 
 interface CreateStoryModalProps {
   isOpen: boolean;
@@ -26,6 +26,11 @@ const PRESET_STORY_IMAGES = [
   { label: '🐼 Giant Panda', url: 'https://images.unsplash.com/photo-1564349683136-77e08dba1ef7?w=800&auto=format&fit=crop&q=80' }
 ];
 
+const PRESET_STORY_VIDEOS = [
+  { label: '🌲 Redwoods Breeze (MP4)', url: '/videos/california_redwoods_breeze.mp4' },
+  { label: '🎬 Showcase Clip (MP4)', url: '/assets/aistudio/SVID_20261023_102316_1_2f3ae485.mp4' }
+];
+
 export const CreateStoryModal: React.FC<CreateStoryModalProps> = ({
   isOpen,
   onClose,
@@ -34,6 +39,7 @@ export const CreateStoryModal: React.FC<CreateStoryModalProps> = ({
   const { profile } = useAuth();
   const [activeTab, setActiveTab] = useState<'image' | 'video' | 'text'>('image');
   const [mediaUrl, setMediaUrl] = useState(PRESET_STORY_IMAGES[0].url);
+  const [videoPreviewUrl, setVideoPreviewUrl] = useState<string>('');
   const [text, setText] = useState('');
   const [selectedBg, setSelectedBg] = useState(BG_GRADIENTS[0]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -46,7 +52,7 @@ export const CreateStoryModal: React.FC<CreateStoryModalProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (activeTab === 'image' || file.type.startsWith('image/')) {
+    if (activeTab === 'image' && !file.type.startsWith('video/')) {
       setIsCompressing(true);
       try {
         const compressedBase64 = await compressImageForUpload(file);
@@ -61,8 +67,11 @@ export const CreateStoryModal: React.FC<CreateStoryModalProps> = ({
       }
     } else {
       const objUrl = URL.createObjectURL(file);
-      setMediaUrl(objUrl);
+      setVideoPreviewUrl(objUrl);
       setActiveTab('video');
+      const mediaKey = `story_vid_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      const sharedRef = await storeSharedMediaToCloud(mediaKey, file);
+      setMediaUrl(sharedRef);
     }
   };
 
@@ -82,7 +91,8 @@ export const CreateStoryModal: React.FC<CreateStoryModalProps> = ({
       onStoryCreated?.();
       onClose();
       // Reset
-      setMediaUrl('');
+      setMediaUrl(PRESET_STORY_IMAGES[0].url);
+      setVideoPreviewUrl('');
       setText('');
     } catch (err) {
       console.error("Story creation error:", err);
@@ -117,7 +127,12 @@ export const CreateStoryModal: React.FC<CreateStoryModalProps> = ({
         <div className="flex border-b border-zinc-100 dark:border-zinc-800 px-6 pt-3 gap-2">
           <button
             type="button"
-            onClick={() => setActiveTab('image')}
+            onClick={() => {
+              setActiveTab('image');
+              if (mediaUrl.endsWith('.mp4') || mediaUrl.startsWith('shared_media:')) {
+                setMediaUrl(PRESET_STORY_IMAGES[0].url);
+              }
+            }}
             className={`flex items-center gap-2 pb-3 px-3 text-sm font-medium border-b-2 transition-colors ${
               activeTab === 'image'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400 font-semibold'
@@ -129,7 +144,13 @@ export const CreateStoryModal: React.FC<CreateStoryModalProps> = ({
           </button>
           <button
             type="button"
-            onClick={() => setActiveTab('video')}
+            onClick={() => {
+              setActiveTab('video');
+              if (!mediaUrl.endsWith('.mp4') && !mediaUrl.startsWith('shared_media:')) {
+                setMediaUrl(PRESET_STORY_VIDEOS[0].url);
+                setVideoPreviewUrl(PRESET_STORY_VIDEOS[0].url);
+              }
+            }}
             className={`flex items-center gap-2 pb-3 px-3 text-sm font-medium border-b-2 transition-colors ${
               activeTab === 'video'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400 font-semibold'
@@ -165,8 +186,17 @@ export const CreateStoryModal: React.FC<CreateStoryModalProps> = ({
             {activeTab === 'image' && mediaUrl && (
               <img src={mediaUrl} alt="Preview" className="w-full h-full object-cover" />
             )}
-            {activeTab === 'video' && mediaUrl && (
-              <video src={mediaUrl} controls autoPlay loop muted className="w-full h-full object-cover" />
+            {activeTab === 'video' && (videoPreviewUrl || mediaUrl) && (
+              <video
+                key={videoPreviewUrl || mediaUrl}
+                src={videoPreviewUrl || (mediaUrl.startsWith('shared_media:') ? '/videos/california_redwoods_breeze.mp4' : mediaUrl)}
+                controls
+                autoPlay
+                loop
+                muted
+                playsInline
+                className="w-full h-full object-cover"
+              />
             )}
             {activeTab === 'text' && (
               <div className="p-6 text-center text-white max-w-sm">
@@ -238,11 +268,43 @@ export const CreateStoryModal: React.FC<CreateStoryModalProps> = ({
                 </div>
               )}
 
+              {activeTab === 'video' && (
+                <div>
+                  <label className="block text-xs font-medium text-zinc-500 mb-1.5">
+                    Or pick a ready-to-play MP4 video preset:
+                  </label>
+                  <div className="flex gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+                    {PRESET_STORY_VIDEOS.map((preset) => (
+                      <button
+                        key={preset.label}
+                        type="button"
+                        onClick={() => {
+                          setMediaUrl(preset.url);
+                          setVideoPreviewUrl(preset.url);
+                        }}
+                        className={`px-2.5 py-1 rounded-xl text-[11px] font-semibold transition-all shrink-0 ${
+                          mediaUrl === preset.url
+                            ? 'bg-emerald-600 text-white shadow-xs'
+                            : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700'
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div>
                 <input
                   type="url"
-                  value={mediaUrl.startsWith('data:') ? '' : mediaUrl}
-                  onChange={(e) => setMediaUrl(e.target.value)}
+                  value={mediaUrl.startsWith('data:') || mediaUrl.startsWith('shared_media:') ? '' : mediaUrl}
+                  onChange={(e) => {
+                    setMediaUrl(e.target.value);
+                    if (activeTab === 'video') {
+                      setVideoPreviewUrl(e.target.value);
+                    }
+                  }}
                   placeholder="Or paste an image/video URL directly..."
                   className="w-full px-3 py-2 text-xs rounded-xl bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                 />

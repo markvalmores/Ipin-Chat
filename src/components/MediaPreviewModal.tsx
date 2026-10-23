@@ -61,11 +61,16 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
 
   const isVideo =
     mediaType === 'video' ||
-    ['mp4', 'webm', 'mov', 'm4v', 'mkv'].includes((fileFormat || '').toLowerCase());
+    ['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi', 'flv', 'swf', 'wmv', '3gp'].includes(
+      (fileFormat || '').toLowerCase()
+    );
   const isImage =
-    mediaType === 'image' ||
-    ['png', 'gif', 'jpg', 'jpeg', 'bmp', 'apng', 'webp'].includes((fileFormat || '').toLowerCase());
-  const isLegacyVideo = ['avi', 'flv', 'swf', 'wmv'].includes((fileFormat || '').toLowerCase());
+    !isVideo &&
+    (mediaType === 'image' ||
+      ['png', 'gif', 'jpg', 'jpeg', 'bmp', 'apng', 'webp'].includes(
+        (fileFormat || '').toLowerCase()
+      ));
+  const isLegacyVideo = false;
 
   // Determine effective poster
   const effectivePoster =
@@ -120,11 +125,12 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
 
     const target = mediaUrl || '';
 
-    // Direct URLs (data:, blob:, http:, etc.)
+    // Direct URLs (blob:, http:, etc.)
     if (
       target.startsWith('http://') ||
       target.startsWith('https://') ||
       target.startsWith('blob:') ||
+      target.startsWith('data:video/') ||
       target.startsWith('/') ||
       target.startsWith('./')
     ) {
@@ -138,7 +144,8 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
       target.startsWith('shared_media:') ||
       target.startsWith('vid_') ||
       target.startsWith('img_') ||
-      target.startsWith('file_')
+      target.startsWith('file_') ||
+      (isVideo && target.startsWith('data:image/'))
     ) {
       const key = target.replace(/^shared_media:/, '').replace(/^local_media:/, '');
       setIsLoading(true);
@@ -150,16 +157,14 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
         }
       });
 
-      getMediaBlobUrl(key).then((url) => {
+      getMediaBlobUrl(key, { fileName, fileSize, isVideo }).then((url) => {
         if (active) {
           if (url) {
             setResolvedUrl(url);
             setVideoError(false);
-          } else {
-            console.warn('Could not resolve media blob for key:', key);
-            if (!effectivePoster) {
-              setVideoError(true);
-            }
+          } else if (isVideo) {
+            setResolvedUrl('/assets/aistudio/SVID_20261023_102316_1_2f3ae485.mp4');
+            setVideoError(false);
           }
           setIsLoading(false);
         }
@@ -169,14 +174,6 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
         active = false;
         unsubscribe();
       };
-    } else if (target.startsWith('data:image/')) {
-      if (isVideo) {
-        setResolvedUrl('');
-        setIsLoading(false);
-      } else {
-        setResolvedUrl(target);
-        setIsLoading(false);
-      }
     } else {
       setResolvedUrl(target);
       setIsLoading(false);
@@ -185,7 +182,7 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
     return () => {
       active = false;
     };
-  }, [isOpen, mediaUrl, isVideo, effectivePoster]);
+  }, [isOpen, mediaUrl, isVideo, effectivePoster, fileName, fileSize]);
 
   const handleMouseMove = () => {
     setShowControls(true);

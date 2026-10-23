@@ -64,9 +64,40 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     setLocalReactions(message.reactions || {});
   }, [message.reactions]);
 
+  const isVideo =
+    message.mediaType === 'video' ||
+    ['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi', 'flv', 'swf', 'wmv', '3gp'].includes(
+      (message.fileFormat || '').toLowerCase()
+    );
+  const isImage =
+    !isVideo &&
+    (message.mediaType === 'image' ||
+      ['png', 'gif', 'jpg', 'jpeg', 'bmp', 'apng', 'webp'].includes(
+        (message.fileFormat || '').toLowerCase()
+      ));
+  const isAudio = message.mediaType === 'audio';
+  const isBigLike = message.text === '👍' && !isImage && !isVideo && !isAudio;
+
   useEffect(() => {
     let active = true;
     const mediaUrl = message.mediaUrl || '';
+
+    // If this is a video message whose mediaUrl was stored as a data:image/ poster in an older session,
+    // resolve it to the playable video stream via getMediaBlobUrl
+    if (isVideo && mediaUrl.startsWith('data:image/')) {
+      getMediaBlobUrl(mediaUrl, {
+        fileName: message.fileName,
+        fileSize: message.fileSize,
+        isVideo: true
+      }).then((url) => {
+        if (active && url) {
+          setResolvedBlobUrl(url);
+        }
+      });
+      return () => {
+        active = false;
+      };
+    }
 
     if (
       mediaUrl.startsWith('http://') ||
@@ -83,13 +114,18 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     if (
       mediaUrl.startsWith('vid_') ||
       mediaUrl.startsWith('local_media:') ||
-      mediaUrl.startsWith('shared_media:')
+      mediaUrl.startsWith('shared_media:') ||
+      isVideo
     ) {
-      const key = mediaUrl
+      const key = (mediaUrl || `vid_fallback_${message.id}`)
         .replace(/^shared_media:/, '')
         .replace(/^local_media:/, '');
 
-      getMediaBlobUrl(key).then((url) => {
+      getMediaBlobUrl(key, {
+        fileName: message.fileName,
+        fileSize: message.fileSize,
+        isVideo
+      }).then((url) => {
         if (active && url) {
           setResolvedBlobUrl(url);
         }
@@ -120,7 +156,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     return () => {
       active = false;
     };
-  }, [message.mediaUrl]);
+  }, [message.mediaUrl, message.fileName, message.fileSize, message.id, isVideo]);
 
   const formatFileSize = (bytes?: number) => {
     if (!bytes) return '';
@@ -211,12 +247,6 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       setIsSavingEdit(false);
     }
   };
-
-  const isVideo = message.mediaType === 'video' || ['mp4', 'webm', 'mov'].includes((message.fileFormat || '').toLowerCase());
-  const isLegacyVideo = ['avi', 'flv', 'swf', 'wmv'].includes((message.fileFormat || '').toLowerCase());
-  const isImage = message.mediaType === 'image' || ['png', 'gif', 'jpg', 'jpeg', 'bmp', 'apng', 'webp'].includes((message.fileFormat || '').toLowerCase());
-  const isAudio = message.mediaType === 'audio';
-  const isBigLike = message.text === '👍' && !isImage && !isVideo && !isAudio;
 
   return (
     <div

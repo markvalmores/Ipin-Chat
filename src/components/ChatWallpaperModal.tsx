@@ -16,6 +16,7 @@ import { Conversation } from '../types';
 import { extractYouTubeId } from '../utils/youtube';
 import { ChatWallpaperSettings, updateConversationWallpaper } from '../services/chatService';
 import { ChatWallpaperView } from './ChatWallpaperView';
+import { storeSharedMediaToCloud, compressImageForUpload } from '../utils/mediaStore';
 
 interface ChatWallpaperModalProps {
   isOpen: boolean;
@@ -26,6 +27,12 @@ interface ChatWallpaperModalProps {
 }
 
 const PRESET_WALLPAPERS = [
+  {
+    name: 'California Redwoods (MP4)',
+    type: 'video' as const,
+    url: '/videos/california_redwoods_breeze.mp4',
+    thumb: '/videos/california_redwoods_poster.jpg'
+  },
   {
     name: 'Cyberpunk Rain (GIF)',
     type: 'gif' as const,
@@ -98,7 +105,7 @@ export const ChatWallpaperModal: React.FC<ChatWallpaperModalProps> = ({
   if (!isOpen) return null;
 
   // Handle local file upload (.png, .jpg, .gif, .mp4)
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -106,12 +113,31 @@ export const ChatWallpaperModal: React.FC<ChatWallpaperModalProps> = ({
     const isGif = file.type === 'image/gif' || file.name.endsWith('.gif');
     const isVideo = file.type.startsWith('video/') || file.name.endsWith('.mp4');
 
+    if (isVideo) {
+      const mediaKey = `wallpaper_vid_${conversation.id}_${Date.now()}`;
+      const sharedRef = await storeSharedMediaToCloud(mediaKey, file);
+      setPreviewURL(sharedRef);
+      setPreviewType('video');
+      return;
+    }
+
+    if (!isGif && file.type.startsWith('image/')) {
+      try {
+        const compressed = await compressImageForUpload(file);
+        setPreviewURL(compressed);
+        setPreviewType('image');
+        return;
+      } catch {
+        // Fallback to FileReader below
+      }
+    }
+
     const reader = new FileReader();
     reader.onload = (event) => {
       const result = event.target?.result as string;
       if (result) {
         setPreviewURL(result);
-        setPreviewType(isVideo ? 'video' : isGif ? 'gif' : 'image');
+        setPreviewType(isGif ? 'gif' : 'image');
       }
     };
     reader.readAsDataURL(file);

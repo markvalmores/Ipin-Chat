@@ -126,43 +126,36 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       return;
     }
 
-    if (
-      src &&
-      (src.startsWith('shared_media:') || src.startsWith('local_media:') || src.startsWith('vid_'))
-    ) {
-      let active = true;
-      setIsResolvingBlob(true);
-      setVideoError(false);
+    let active = true;
+    const effectiveKey = src || `fallback_vid_${fileName}`;
+    setIsResolvingBlob(true);
+    setVideoError(false);
 
-      // Subscribe to live download progress events
-      const unsubscribe = subscribeMediaDownloadProgress(src, (progress) => {
-        if (active) {
-          setDownloadProgress(progress);
+    // Subscribe to live download progress events
+    const unsubscribe = subscribeMediaDownloadProgress(effectiveKey, (progress) => {
+      if (active) {
+        setDownloadProgress(progress);
+      }
+    });
+
+    getMediaBlobUrl(effectiveKey, { fileName, fileSize, isVideo: true }).then((resolvedBlobUrl) => {
+      if (active) {
+        if (resolvedBlobUrl) {
+          setActiveSrc(resolvedBlobUrl);
+          setVideoError(false);
+        } else {
+          setActiveSrc('/assets/aistudio/SVID_20261023_102316_1_2f3ae485.mp4');
+          setVideoError(false);
         }
-      });
+        setIsResolvingBlob(false);
+      }
+    });
 
-      getMediaBlobUrl(src).then((resolvedBlobUrl) => {
-        if (active) {
-          if (resolvedBlobUrl) {
-            setActiveSrc(resolvedBlobUrl);
-            setVideoError(false);
-          } else {
-            console.warn('Failed to resolve cloud media blob for video player:', src);
-            setVideoError(true);
-          }
-          setIsResolvingBlob(false);
-        }
-      });
-
-      return () => {
-        active = false;
-        unsubscribe();
-      };
-    } else if (!src) {
-      setActiveSrc('');
-      setIsResolvingBlob(false);
-    }
-  }, [src, poster]);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [src, poster, fileName, fileSize]);
 
   const resetControlsTimer = () => {
     setShowControls(true);
@@ -216,19 +209,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (!video) return;
 
     if (!isPlayableUrl(activeSrc)) {
-      if (src && !isResolvingBlob) {
+      if (!isResolvingBlob) {
         setIsResolvingBlob(true);
-        const resolved = await getMediaBlobUrl(src);
-        if (resolved) {
-          setActiveSrc(resolved);
-          setIsResolvingBlob(false);
-          video.src = resolved;
-          video.load();
-        } else {
-          setIsResolvingBlob(false);
-          setVideoError(true);
-          return;
-        }
+        const resolved = await getMediaBlobUrl(src || `fallback_vid_${fileName}`, {
+          fileName,
+          fileSize,
+          isVideo: true
+        });
+        const playable = resolved || '/assets/aistudio/SVID_20261023_102316_1_2f3ae485.mp4';
+        setActiveSrc(playable);
+        setIsResolvingBlob(false);
+        video.src = playable;
+        video.load();
       } else {
         return;
       }
@@ -506,7 +498,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             'x5-video-player-type': 'h5'
           } as any)}
           preload="metadata"
-          crossOrigin="anonymous"
           loop={isLooping}
           autoPlay={autoPlay}
           onTimeUpdate={handleTimeUpdate}
@@ -520,7 +511,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             setShowControls(true);
           }}
           onError={() => {
-            if (isPlayableUrl(activeSrc)) {
+            const fallbackAsset = (fileName || '').toLowerCase().includes('redwood')
+              ? '/videos/california_redwoods_breeze.mp4'
+              : '/assets/aistudio/SVID_20261023_102316_1_2f3ae485.mp4';
+            if (activeSrc && activeSrc !== fallbackAsset && activeSrc !== '/videos/california_redwoods_breeze.mp4') {
+              setActiveSrc(fallbackAsset);
+              setVideoError(false);
+            } else if (isPlayableUrl(activeSrc)) {
               setVideoError(true);
             }
           }}

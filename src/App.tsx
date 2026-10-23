@@ -70,11 +70,15 @@ const MessengerInner: React.FC = () => {
   // Real-time conversations listener
   useEffect(() => {
     if (!profile) return;
-    const unsubscribe = subscribeToConversations(profile.uid, (list) => {
-      setConversations(list);
-    });
+    const unsubscribe = subscribeToConversations(
+      profile.uid,
+      (list) => {
+        setConversations(list);
+      },
+      profile.displayName
+    );
     return () => unsubscribe();
-  }, [profile?.uid]);
+  }, [profile?.uid, profile?.displayName]);
 
   // Real-time all users listener
   useEffect(() => {

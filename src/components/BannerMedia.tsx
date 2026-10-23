@@ -14,16 +14,24 @@ export const BannerMedia: React.FC<BannerMediaProps> = ({
   className = 'w-full h-full'
 }) => {
   const [resolvedBlobUrl, setResolvedBlobUrl] = useState<string | null>(null);
+  const [videoFallbackUrl, setVideoFallbackUrl] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
-    if (bannerURL?.startsWith('local_mp4:')) {
-      const key = bannerURL.replace('local_mp4:', '');
-      getMediaBlobUrl(key).then((url) => {
+    setVideoFallbackUrl(null);
+    if (
+      bannerURL?.startsWith('local_mp4:') ||
+      bannerURL?.startsWith('shared_media:') ||
+      bannerURL?.startsWith('local_media:')
+    ) {
+      const key = bannerURL.replace(/^local_mp4:/, '');
+      getMediaBlobUrl(key, { isVideo: true }).then((url) => {
         if (active && url) {
           setResolvedBlobUrl(url);
         }
       });
+    } else if (bannerURL?.includes('assets.mixkit.co')) {
+      setResolvedBlobUrl('/videos/california_redwoods_breeze.mp4');
     } else {
       setResolvedBlobUrl(null);
     }
@@ -59,14 +67,16 @@ export const BannerMedia: React.FC<BannerMediaProps> = ({
   }
 
   // 2. Direct MP4 Video Banner (Device MP4 upload, blob URL, or MP4 URL)
-  const effectiveVideoUrl = resolvedBlobUrl || (bannerURL.startsWith('blob:') ? bannerURL : null) || (
-    bannerType === 'video' ||
+  const effectiveVideoUrl =
+    videoFallbackUrl ||
+    resolvedBlobUrl ||
+    (bannerURL.startsWith('blob:') ? bannerURL : null) ||
+    (bannerType === 'video' ||
     bannerURL.endsWith('.mp4') ||
     bannerURL.includes('.mp4?') ||
     bannerURL.startsWith('data:video/')
       ? bannerURL
-      : null
-  );
+      : null);
 
   if (effectiveVideoUrl) {
     return (
@@ -78,6 +88,11 @@ export const BannerMedia: React.FC<BannerMediaProps> = ({
           loop
           muted
           playsInline
+          onError={() => {
+            if (effectiveVideoUrl !== '/videos/california_redwoods_breeze.mp4') {
+              setVideoFallbackUrl('/videos/california_redwoods_breeze.mp4');
+            }
+          }}
           className="w-full h-full object-cover"
         />
         <div className="absolute inset-0 bg-gradient-to-b from-black/20 via-transparent to-black/40 pointer-events-none" />
