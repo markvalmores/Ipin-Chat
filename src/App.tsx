@@ -31,7 +31,16 @@ import { JoinGroupInviteModal } from './components/JoinGroupInviteModal';
 const MessengerInner: React.FC = () => {
   const { profile, isAuthReady } = useAuth();
 
-  const [hasProceeded, setHasProceeded] = useState(false);
+  const [hasProceeded, setHasProceeded] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem('ipin_active_user') || localStorage.getItem('ipin_active_demo_user');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && parsed.uid) return true;
+      }
+    } catch (e) {}
+    return false;
+  });
   const [authScreenInitialTab, setAuthScreenInitialTab] = useState<'signin' | 'signup'>('signin');
   const [conversations, setConversations] = useState<Conversation[]>(INITIAL_PUBLIC_CHANNELS);
   const [activeConversationId, setActiveConversationId] = useState<string>('global-china-lounge');
@@ -109,14 +118,21 @@ const MessengerInner: React.FC = () => {
     );
   }
 
-  // 2. Loading state
+  // 2. Loading state: with automatic 0ms fallback and manual proceed
   if (!isAuthReady) {
     return (
-      <div className="min-h-screen w-screen bg-zinc-950 flex flex-col items-center justify-center text-white">
+      <div className="min-h-screen w-screen bg-zinc-950 flex flex-col items-center justify-center text-white px-4">
         <div className="w-14 h-14 rounded-3xl bg-gradient-to-tr from-emerald-600 to-teal-500 animate-pulse flex items-center justify-center text-2xl font-bold mb-3 shadow-lg shadow-emerald-500/20">
           🟢
         </div>
         <p className="text-sm font-semibold text-emerald-400">Connecting to ipin Messenger...</p>
+        <button
+          type="button"
+          onClick={() => setHasProceeded(true)}
+          className="mt-4 px-4 py-2 rounded-xl bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 text-xs font-medium border border-emerald-500/30 transition cursor-pointer"
+        >
+          Proceed to Chat Now &rarr;
+        </button>
       </div>
     );
   }

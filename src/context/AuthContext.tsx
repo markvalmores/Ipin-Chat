@@ -63,13 +63,57 @@ function normalizeUserStatus(s?: UserStatus): 'online' | 'busy' | 'offline' {
   return 'online';
 }
 
+function getSynchronousStoredProfile(): { profile: UserProfile | null; isDemo: boolean } {
+  try {
+    const storedUser = localStorage.getItem('ipin_active_user');
+    if (storedUser) {
+      const parsed = JSON.parse(storedUser) as UserProfile;
+      if (parsed && parsed.uid && !isGhostProfile(parsed)) {
+        const preservedStatus = normalizeUserStatus(parsed.status);
+        const cleaned: UserProfile = {
+          ...parsed,
+          displayName: cleanDisplayName(parsed.displayName) || parsed.displayName,
+          status: preservedStatus,
+          lastSeen:
+            preservedStatus === 'busy'
+              ? 'Busy (Do Not Disturb)'
+              : preservedStatus === 'offline'
+              ? 'Offline'
+              : 'Active now'
+        };
+        return { profile: cleaned, isDemo: cleaned.uid.startsWith('demo_user_') };
+      }
+    }
+    const storedDemo = localStorage.getItem('ipin_active_demo_user');
+    if (storedDemo) {
+      const parsed = JSON.parse(storedDemo) as UserProfile;
+      if (parsed && parsed.uid) {
+        const preservedStatus = normalizeUserStatus(parsed.status);
+        const cleaned: UserProfile = {
+          ...parsed,
+          status: preservedStatus,
+          lastSeen:
+            preservedStatus === 'busy'
+              ? 'Busy (Do Not Disturb)'
+              : preservedStatus === 'offline'
+              ? 'Offline'
+              : 'Active now'
+        };
+        return { profile: cleaned, isDemo: true };
+      }
+    }
+  } catch (e) {}
+  return { profile: null, isDemo: false };
+}
+
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const initialData = getSynchronousStoredProfile();
   const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [profile, setProfile] = useState<UserProfile | null>(initialData.profile);
+  const [isAuthReady, setIsAuthReady] = useState(true);
   const [activePresences, setActivePresences] = useState<ActivePresence[]>([]);
   const [loginError, setLoginError] = useState<string | null>(null);
-  const [isDemoMode, setIsDemoMode] = useState(false);
+  const [isDemoMode, setIsDemoMode] = useState(initialData.isDemo);
 
   // Track local reception timestamps for each user's heartbeat to handle both clock skew and physical disconnects
   const heartbeatTrackerRef = useRef<Map<string, { lastActiveStr: string; receivedAtMs: number; rawDoc: ActivePresence }>>(
@@ -104,7 +148,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const ghostUidsToDelete: string[] = [];
 
     try {
-      const usersSnap = await getDocs(collection(db, 'users'));
+      const usersSnapPromise = getDocs(collection(db, 'users'));
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Firestore read timeout')), 2500)
+      );
+      const usersSnap = await Promise.race([usersSnapPromise, timeoutPromise]);
       usersSnap.forEach((docSnap) => {
         const u = docSnap.data() as UserProfile;
         const docUid = u.uid || docSnap.id;
@@ -137,7 +185,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         }
       });
     } catch (e) {
-      // Fallback if offline
+      // Fallback on timeout or offline
     }
 
     let finalProfile: UserProfile;
@@ -196,104 +244,60 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       };
     }
 
-    // Save the 1 canonical profile to Firestore
+    // Save the 1 canonical profile to Firestore in background (non-blocking)
     try {
-      await setDoc(doc(db, 'users', finalProfile.uid), finalProfile, { merge: true });
+      setDoc(doc(db, 'users', finalProfile.uid), finalProfile, { merge: true }).catch(() => {});
     } catch (e) {}
 
-    // Delete all duplicate & ghost profiles from Firestore `users` and `active_presences`
+    // Delete all duplicate & ghost profiles from Firestore `users` and `active_presences` in background
     const allToDelete = Array.from(new Set([...duplicateUids, ...ghostUidsToDelete])).filter(
       (id) => id && id !== finalProfile.uid && !id.startsWith('demo_user_')
     );
     if (allToDelete.length > 0) {
-      await Promise.allSettled(
+      Promise.allSettled(
         allToDelete.flatMap((dupUid) => [
           deleteDoc(doc(db, 'users', dupUid)),
           deleteDoc(doc(db, 'active_presences', dupUid))
         ])
-      );
+      ).catch(() => {});
     }
 
     return finalProfile;
   };
 
-  // Initialize Auth listener and restore active session
+  // Initialize Auth listener and restore active session with zero delay
   useEffect(() => {
-    try {
-      localStorage.removeItem('ipin_last_login_email');
-    } catch (e) {}
-
     let active = true;
 
-    const restoreStoredProfile = (): UserProfile | null => {
-      try {
-        const storedUser = localStorage.getItem('ipin_active_user');
-        const storedDemo = localStorage.getItem('ipin_active_demo_user');
+    // Failsafe timer: guarantee isAuthReady is never blocked
+    setIsAuthReady(true);
+    const readyTimer = setTimeout(() => {
+      if (active) setIsAuthReady(true);
+    }, 200);
 
-        if (storedUser && active) {
-          const parsed = JSON.parse(storedUser) as UserProfile;
-          if (parsed && parsed.uid && !isGhostProfile(parsed)) {
-            const preservedStatus = normalizeUserStatus(parsed.status);
-            const cleaned: UserProfile = {
-              ...parsed,
-              displayName: cleanDisplayName(parsed.displayName) || parsed.displayName,
-              status: preservedStatus,
-              lastSeen:
-                preservedStatus === 'busy'
-                  ? 'Busy (Do Not Disturb)'
-                  : preservedStatus === 'offline'
-                  ? 'Offline'
-                  : 'Active now'
-            };
-            setProfile(cleaned);
-            setIsDemoMode(cleaned.uid.startsWith('demo_user_'));
-            return cleaned;
-          } else if (parsed && isGhostProfile(parsed)) {
-            localStorage.removeItem('ipin_active_user');
-          }
-        }
-        if (storedDemo && active) {
-          const parsed = JSON.parse(storedDemo) as UserProfile;
-          if (parsed && parsed.uid) {
-            const preservedStatus = normalizeUserStatus(parsed.status);
-            const cleaned: UserProfile = {
-              ...parsed,
-              status: preservedStatus,
-              lastSeen:
-                preservedStatus === 'busy'
-                  ? 'Busy (Do Not Disturb)'
-                  : preservedStatus === 'offline'
-                  ? 'Offline'
-                  : 'Active now'
-            };
-            setProfile(cleaned);
-            setIsDemoMode(true);
-            return cleaned;
-          }
-        }
-      } catch (e) {}
-      return null;
-    };
+    // If we have a stored profile and no currentUser yet, initialize anonymous auth in background so Firestore rules pass
+    if (initialData.profile && !auth.currentUser) {
+      signInAnonymously(auth).catch(() => {});
+    }
 
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       if (!active) return;
+      setIsAuthReady(true);
 
       if (firebaseUser && firebaseUser.isAnonymous) {
         setUser(firebaseUser);
-        const restored = restoreStoredProfile();
-        if (!restored && active) {
-          setProfile(null);
-          setIsDemoMode(false);
-        } else if (restored && active) {
-          // Run background deduplication so if the restored profile has a duplicate or original email in Firestore, it syncs to 1 profile
-          purgeGhostAndDuplicateProfilesInFirestore(restored, true).then((canonical) => {
+        const current = profile || initialData.profile;
+        if (current && !isGhostProfile(current)) {
+          // Run background deduplication so canonical profile updates smoothly
+          purgeGhostAndDuplicateProfilesInFirestore(current, true).then((canonical) => {
             if (active && canonical && !isGhostProfile(canonical)) {
               setProfile(canonical);
-              localStorage.setItem('ipin_active_user', JSON.stringify(canonical));
+              try {
+                localStorage.setItem('ipin_active_user', JSON.stringify(canonical));
+              } catch (e) {}
             }
-          });
+          }).catch(() => {});
         }
-        if (active) setIsAuthReady(true);
         return;
       }
 
@@ -301,48 +305,50 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         setUser(firebaseUser);
         setIsDemoMode(false);
 
-        try {
-          const syncedProfile = await resolveAndSyncSingleProfile({
-            candidateUid: firebaseUser.uid,
-            email: firebaseUser.email || undefined,
-            displayName: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || undefined,
-            photoURL: firebaseUser.photoURL || undefined
+        // Run profile synchronization in background without blocking UI
+        resolveAndSyncSingleProfile({
+          candidateUid: firebaseUser.uid,
+          email: firebaseUser.email || undefined,
+          displayName: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || undefined,
+          photoURL: firebaseUser.photoURL || undefined
+        })
+          .then((syncedProfile) => {
+            if (active) {
+              setProfile(syncedProfile);
+              try {
+                localStorage.setItem('ipin_active_user', JSON.stringify(syncedProfile));
+              } catch (e) {}
+            }
+            purgeGhostAndDuplicateProfilesInFirestore(syncedProfile, true).catch(() => {});
+          })
+          .catch((error) => {
+            console.warn('Background sync note:', error);
           });
-          if (active) {
-            setProfile(syncedProfile);
-            localStorage.setItem('ipin_active_user', JSON.stringify(syncedProfile));
-          }
-          // Also run full database deduplication sweep
-          purgeGhostAndDuplicateProfilesInFirestore(syncedProfile, true).catch(() => {});
-        } catch (error) {
-          console.warn('Could not sync user profile from Firestore:', error);
-        }
       } else {
         setUser(null);
-        const restored = restoreStoredProfile();
-        if (restored) {
+        const current = profile || initialData.profile;
+        if (current && !isGhostProfile(current)) {
           if (!auth.currentUser) {
             signInAnonymously(auth).catch(() => {});
           }
-          purgeGhostAndDuplicateProfilesInFirestore(restored, true).then((canonical) => {
+          purgeGhostAndDuplicateProfilesInFirestore(current, true).then((canonical) => {
             if (active && canonical && !isGhostProfile(canonical)) {
               setProfile(canonical);
-              localStorage.setItem('ipin_active_user', JSON.stringify(canonical));
+              try {
+                localStorage.setItem('ipin_active_user', JSON.stringify(canonical));
+              } catch (e) {}
             }
-          });
+          }).catch(() => {});
         } else if (active) {
           setProfile(null);
           setIsDemoMode(false);
         }
       }
-
-      if (active) {
-        setIsAuthReady(true);
-      }
     });
 
     return () => {
       active = false;
+      clearTimeout(readyTimer);
       unsubscribe();
     };
   }, []);
