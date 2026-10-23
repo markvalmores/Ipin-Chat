@@ -227,31 +227,31 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         let posterUrl: string | undefined = undefined;
 
         if (selectedFile.type === 'image') {
-          // Compress image so it never exceeds Firestore 1MB limits
-          finalMediaUrl = await compressImageForUpload(selectedFile.file);
-        } else if (selectedFile.type === 'video') {
-          // Pass video through Video Encoder API to ensure universal H.264/WebM cross-device playback
-          const encoded = await encodeVideoBlob(selectedFile.file, {
-            targetFormat: 'auto',
-            maxDimension: 1280,
-            videoBitrate: 1200000
+          // Store exact original image file (PNG, JPG, GIF, WebP) via cloud chunks or data URL
+          const mediaKey = `img_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+          finalMediaUrl = await storeSharedMediaToCloud(mediaKey, selectedFile.file, {
+            fileName: selectedFile.name,
+            fileFormat: selectedFile.format,
+            fileSize: selectedFile.file.size
           });
-
-          posterUrl = encoded.posterUrl || (await captureVideoPoster(selectedFile.file)) || undefined;
+        } else if (selectedFile.type === 'video') {
+          // Extract poster thumbnail frame
+          posterUrl = (await captureVideoPoster(selectedFile.file)) || undefined;
           const mediaKey = `vid_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
 
-          // Store encoded video into cloud chunks + local IndexedDB so both users can play & download!
-          finalMediaUrl = await storeSharedMediaToCloud(mediaKey, encoded.blob, {
+          // Store exact original video file (MP4, WebM, MOV, etc.) into cloud chunks + local IndexedDB
+          finalMediaUrl = await storeSharedMediaToCloud(mediaKey, selectedFile.file, {
             fileName: selectedFile.name,
-            fileFormat: selectedFile.format || encoded.format,
-            fileSize: encoded.blob.size
+            fileFormat: selectedFile.format || 'mp4',
+            fileSize: selectedFile.file.size
           });
         } else {
-          // Audio or file
-          finalMediaUrl = await new Promise<string>((res) => {
-            const reader = new FileReader();
-            reader.onload = () => res(reader.result as string);
-            reader.readAsDataURL(selectedFile.file);
+          // Audio, Document, or File attachment
+          const mediaKey = `file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+          finalMediaUrl = await storeSharedMediaToCloud(mediaKey, selectedFile.file, {
+            fileName: selectedFile.name,
+            fileFormat: selectedFile.format,
+            fileSize: selectedFile.file.size
           });
         }
 

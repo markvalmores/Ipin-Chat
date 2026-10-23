@@ -375,8 +375,27 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                   className="max-h-72 w-auto object-cover rounded-2xl hover:opacity-95 transition-opacity"
                   loading="lazy"
                 />
-                <div className="absolute top-2 right-2 px-2 py-0.5 rounded-md bg-black/60 text-[10px] text-white font-mono uppercase backdrop-blur-xs">
-                  {message.fileFormat || 'IMG'}
+                <div className="absolute top-2 right-2 flex items-center gap-1.5 z-10">
+                  <span className="px-2 py-0.5 rounded-md bg-black/60 text-[10px] text-white font-mono uppercase backdrop-blur-xs">
+                    {message.fileFormat || 'IMG'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      downloadMediaFile({
+                        urlOrKey: message.mediaUrl!,
+                        mediaUrl: message.mediaUrl,
+                        fileName: message.fileName,
+                        fileFormat: message.fileFormat,
+                        fileSize: message.fileSize
+                      });
+                    }}
+                    className="p-1 rounded-md bg-black/60 hover:bg-black/85 text-white backdrop-blur-xs transition-all shadow-md cursor-pointer"
+                    title={`Download actual ${message.fileFormat?.toUpperCase() || 'image'} file`}
+                  >
+                    <Download size={12} />
+                  </button>
                 </div>
               </div>
             )}
