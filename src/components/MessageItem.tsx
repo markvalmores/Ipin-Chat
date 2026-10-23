@@ -419,7 +419,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                   // If resolving blob key from cloud or local store
                   return (
                     <div
-                      className="relative cursor-pointer group/vid rounded-2xl overflow-hidden bg-zinc-900 border border-zinc-800 p-2"
+                      className="relative cursor-pointer group/vid rounded-2xl overflow-hidden bg-zinc-900 border border-zinc-800 p-2 min-h-[160px] flex items-center justify-center"
                       onClick={async () => {
                         let finalSrc = validSrc;
                         if (!finalSrc && message.mediaUrl) {
@@ -430,16 +430,14 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                             finalSrc = url;
                           }
                         }
-                        if (finalSrc) {
-                          onPreviewMedia({
-                            url: finalSrc,
-                            type: 'video',
-                            name: message.fileName,
-                            format: message.fileFormat,
-                            size: message.fileSize,
-                            posterUrl: poster || message.posterUrl
-                          });
-                        }
+                        onPreviewMedia({
+                          url: finalSrc || poster || message.mediaUrl || '',
+                          type: 'video',
+                          name: message.fileName,
+                          format: message.fileFormat,
+                          size: message.fileSize,
+                          posterUrl: poster || message.posterUrl
+                        });
                       }}
                     >
                       {poster ? (

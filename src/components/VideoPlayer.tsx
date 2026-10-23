@@ -141,7 +141,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setVideoError(false);
   };
 
-  const togglePlay = async (e?: React.MouseEvent) => {
+  const togglePlay = async (e?: React.MouseEvent | React.TouchEvent) => {
     if (e) {
       e.stopPropagation();
       e.preventDefault();
@@ -149,6 +149,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     resetControlsTimer();
     const video = videoRef.current;
     if (!video) return;
+
+    if (!video.src || video.src === window.location.href) {
+      if (activeSrc) {
+        video.src = activeSrc;
+        video.load();
+      } else {
+        setVideoError(true);
+        return;
+      }
+    }
 
     if (video.paused || video.ended) {
       try {
@@ -476,10 +486,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
         {/* Center Play Button Overlay (when paused) */}
         {!isPlaying && !isEncoding && !videoError && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/25 hover:bg-black/35 transition-colors pointer-events-none">
-            <div className="w-16 h-16 sm:w-18 sm:h-18 rounded-full bg-emerald-600/90 hover:bg-emerald-500 text-white flex items-center justify-center shadow-2xl shadow-emerald-500/50 backdrop-blur-xs transform hover:scale-110 active:scale-95 transition-all">
+          <div className="absolute inset-0 flex items-center justify-center bg-black/25 hover:bg-black/35 transition-colors pointer-events-none z-10">
+            <button
+              type="button"
+              onClick={togglePlay}
+              onTouchEnd={(e) => {
+                e.stopPropagation();
+                togglePlay(e as any);
+              }}
+              className="pointer-events-auto w-16 h-16 sm:w-18 sm:h-18 rounded-full bg-emerald-600/90 hover:bg-emerald-500 active:bg-emerald-700 text-white flex items-center justify-center shadow-2xl shadow-emerald-500/50 backdrop-blur-xs transform hover:scale-110 active:scale-95 transition-all cursor-pointer"
+              title="Play Video"
+            >
               <Play size={32} className="ml-1 fill-current" />
-            </div>
+            </button>
           </div>
         )}
 
