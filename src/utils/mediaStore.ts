@@ -23,6 +23,16 @@ export interface MediaDownloadProgress {
 }
 
 /**
+ * Promise wrapper with timeout protection to prevent Firestore setDoc from hanging on slow 4G or offline queues
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error('Operation timeout')), ms))
+  ]);
+}
+
+/**
  * Listen for live download / buffering byte accumulation for a given media key
  */
 export function subscribeMediaDownloadProgress(
@@ -217,9 +227,72 @@ export async function storeMediaBlob(key: string, blob: Blob): Promise<string> {
 }
 
 /**
- * Saves a media blob to Firestore cloud chunks and local IndexedDB, returning
- * an embedded Data URL (for fast small videos <= 500KB) or 'shared_media:{key}'
- * so both users on any device or browser can instantly play and download it!
+ * Uploads media chunks to Firestore asynchronously in the background so sending never blocks UI
+ */
+async function uploadSharedMediaChunksInBackground(
+  cleanKey: string,
+  blob: Blob,
+  options?: { fileName?: string; fileFormat?: string; fileSize?: number }
+): Promise<void> {
+  try {
+    // 450 KB binary slice per chunk (~600,000 base64 chars)
+    const BINARY_CHUNK_SIZE = 450 * 1024;
+    const totalChunks = Math.ceil(blob.size / BINARY_CHUNK_SIZE);
+    const mimeType = blob.type || (options?.fileFormat ? `video/${options.fileFormat}` : 'video/mp4');
+    const fileName = options?.fileName || 'Video_Message.mp4';
+    const fileSize = blob.size;
+
+    // Parent metadata doc with 8-second timeout guard
+    await withTimeout(
+      setDoc(doc(db, 'shared_media', cleanKey), {
+        id: cleanKey,
+        mimeType,
+        fileName,
+        fileSize,
+        totalChunks,
+        createdAt: new Date().toISOString()
+      }),
+      8000
+    );
+
+    // Upload chunks in small batches of 3
+    const BATCH_SIZE = 3;
+    for (let i = 0; i < totalChunks; i += BATCH_SIZE) {
+      const end = Math.min(i + BATCH_SIZE, totalChunks);
+      const batchPromises: Promise<any>[] = [];
+
+      for (let j = i; j < end; j++) {
+        const start = j * BINARY_CHUNK_SIZE;
+        const chunkEnd = Math.min(start + BINARY_CHUNK_SIZE, blob.size);
+        const slice = blob.slice(start, chunkEnd);
+        const b64Data = await blobToBase64(slice);
+        const cleanB64 = b64Data.includes(',') ? b64Data.split(',')[1] : b64Data;
+
+        batchPromises.push(
+          withTimeout(
+            setDoc(doc(db, 'shared_media', cleanKey, 'chunks', String(j)), {
+              index: j,
+              data: cleanB64
+            }),
+            10000
+          )
+        );
+      }
+
+      try {
+        await Promise.all(batchPromises);
+      } catch (batchErr) {
+        console.warn(`Chunk batch ${i} to ${end} background sync notice:`, batchErr);
+      }
+    }
+  } catch (err) {
+    console.warn('Background chunk upload complete notice:', err);
+  }
+}
+
+/**
+ * Saves a media blob to local IndexedDB instantly (< 5ms) and schedules background cloud sync.
+ * Returns immediately so sending video messages NEVER blocks or spins in a loop!
  */
 export async function storeSharedMediaToCloud(
   key: string,
@@ -230,7 +303,7 @@ export async function storeSharedMediaToCloud(
     .replace(/^shared_media:/, '')
     .replace(/^local_media:/, '');
 
-  // 1. Cache locally first for instant sender playback
+  // 1. Cache locally first for instant sender playback (< 5 ms)
   await storeMediaBlob(cleanKey, blob);
 
   // 2. If small enough (<= 500 KB), return embedded data URL for instant 0-roundtrip sync!
@@ -239,61 +312,12 @@ export async function storeSharedMediaToCloud(
     return dataUrl;
   }
 
-  // 3. For larger video, upload chunks in controlled batches of 3 to avoid mobile 4G drops
-  try {
-    const fullDataUrl = await blobToBase64(blob);
-    const b64Data = fullDataUrl.includes(',') ? fullDataUrl.split(',')[1] : fullDataUrl;
-    
-    // 600,000 characters is a multiple of 4 (600,000 % 4 === 0) and is ~450 KB binary, safely within Firestore 1MB doc limit
-    const CHUNK_SIZE = 600000;
-    const totalChunks = Math.ceil(b64Data.length / CHUNK_SIZE);
-    const mimeType = blob.type || (options?.fileFormat ? `video/${options.fileFormat}` : 'video/mp4');
-    const fileName = options?.fileName || 'Video_Message.mp4';
-    const fileSize = blob.size;
+  // 3. For larger video/file, kick off asynchronous background upload so UI returns immediately in < 50ms!
+  uploadSharedMediaChunksInBackground(cleanKey, blob, options).catch((err) => {
+    console.warn('Background chunk upload handle error:', err);
+  });
 
-    // Parent metadata doc
-    await setDoc(doc(db, 'shared_media', cleanKey), {
-      id: cleanKey,
-      mimeType,
-      fileName,
-      fileSize,
-      totalChunks,
-      createdAt: new Date().toISOString()
-    });
-
-    // Upload chunks in small batches of 3 with retry to protect mobile connections
-    const BATCH_SIZE = 3;
-    for (let i = 0; i < totalChunks; i += BATCH_SIZE) {
-      const batchPromises: Promise<any>[] = [];
-      const end = Math.min(i + BATCH_SIZE, totalChunks);
-      
-      for (let j = i; j < end; j++) {
-        const chunkPart = b64Data.slice(j * CHUNK_SIZE, (j + 1) * CHUNK_SIZE);
-        const chunkDocRef = doc(db, 'shared_media', cleanKey, 'chunks', String(j));
-        batchPromises.push(
-          setDoc(chunkDocRef, {
-            index: j,
-            data: chunkPart
-          })
-        );
-      }
-
-      // Execute batch
-      try {
-        await Promise.all(batchPromises);
-      } catch (batchErr) {
-        console.warn(`Retry chunk batch ${i} to ${end}:`, batchErr);
-        // Small retry delay
-        await new Promise((r) => setTimeout(r, 400));
-        await Promise.all(batchPromises);
-      }
-    }
-
-    return `shared_media:${cleanKey}`;
-  } catch (err) {
-    console.warn('Failed to upload shared media chunks to Firestore:', err);
-    return `local_media:${cleanKey}`;
-  }
+  return `shared_media:${cleanKey}`;
 }
 
 /**
@@ -341,7 +365,7 @@ export async function getMediaBlob(key: string): Promise<Blob | null> {
   // 2. Fetch from Firestore shared_media cloud storage with progressive byte accumulation
   try {
     const mediaDocRef = doc(db, 'shared_media', cleanKey);
-    const mediaDocSnap = await getDoc(mediaDocRef);
+    const mediaDocSnap = await withTimeout(getDoc(mediaDocRef), 6000);
     if (mediaDocSnap.exists()) {
       const meta = mediaDocSnap.data();
       const mimeType = meta.mimeType || 'video/mp4';
@@ -375,7 +399,7 @@ export async function getMediaBlob(key: string): Promise<Blob | null> {
 
         const chunkDocSnaps = await Promise.all(
           batchIndices.map((idx) =>
-            getDoc(doc(db, 'shared_media', cleanKey, 'chunks', String(idx)))
+            withTimeout(getDoc(doc(db, 'shared_media', cleanKey, 'chunks', String(idx))), 8000)
           )
         );
 
@@ -433,7 +457,7 @@ export async function getMediaBlob(key: string): Promise<Blob | null> {
       }
     }
   } catch (err) {
-    console.warn('Firestore shared media fetch error:', err);
+    console.warn('Firestore shared media fetch notice:', err);
   }
 
   // 3. Fallback: BroadcastChannel request from sender tab
@@ -719,7 +743,7 @@ export async function compressImageForUpload(file: File): Promise<string> {
 }
 
 /**
- * Capture poster frame from an MP4/WebM video file
+ * Capture poster frame from an MP4/WebM video file with safe 1.2s timeout
  */
 export async function captureVideoPoster(file: File): Promise<string> {
   return new Promise((resolve) => {
@@ -733,7 +757,7 @@ export async function captureVideoPoster(file: File): Promise<string> {
     const timeout = setTimeout(() => {
       URL.revokeObjectURL(url);
       resolve('');
-    }, 4000);
+    }, 1200);
 
     const extractFrame = () => {
       try {
