@@ -19,7 +19,8 @@ import {
   PictureInPicture,
   Scan,
   Maximize2,
-  Minimize2
+  Minimize2,
+  RefreshCw
 } from 'lucide-react';
 import {
   formatTime,
@@ -28,7 +29,12 @@ import {
   EncodedVideoResult,
   getResolutionLabel
 } from '../utils/videoEncoder';
-import { downloadMediaFile } from '../utils/mediaStore';
+import {
+  downloadMediaFile,
+  getMediaBlobUrl,
+  subscribeMediaDownloadProgress,
+  MediaDownloadProgress
+} from '../utils/mediaStore';
 
 interface VideoPlayerProps {
   src: string;
@@ -42,6 +48,18 @@ interface VideoPlayerProps {
   onDownload?: () => void;
   showEncoderBadge?: boolean;
   initialFitMode?: 'contain' | 'cover';
+}
+
+function isPlayableUrl(url?: string): boolean {
+  if (!url) return false;
+  return (
+    url.startsWith('blob:') ||
+    url.startsWith('data:video/') ||
+    url.startsWith('http://') ||
+    url.startsWith('https://') ||
+    url.startsWith('/') ||
+    url.startsWith('./')
+  );
 }
 
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
@@ -78,7 +96,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [hoverPosition, setHoverPosition] = useState<number>(0);
 
   // Encoder API & Download States
-  const [activeSrc, setActiveSrc] = useState<string>(src);
+  const [activeSrc, setActiveSrc] = useState<string>(isPlayableUrl(src) ? src : '');
   const [activePoster, setActivePoster] = useState<string | undefined>(poster);
   const [isEncoding, setIsEncoding] = useState(false);
   const [encodingProgress, setEncodingProgress] = useState(0);
@@ -90,13 +108,60 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadSuccess, setDownloadSuccess] = useState(false);
 
+  // Dynamic live download & chunk accumulation state
+  const [isResolvingBlob, setIsResolvingBlob] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState<MediaDownloadProgress | null>(null);
+
   // Control bar auto-hide timer for touch & mouse
   const controlsTimerRef = useRef<number | null>(null);
 
+  // Synchronize incoming src prop and auto-resolve cloud chunks
   useEffect(() => {
-    setActiveSrc(src);
     setActivePoster(poster);
-    setVideoError(false);
+
+    if (isPlayableUrl(src)) {
+      setActiveSrc(src);
+      setIsResolvingBlob(false);
+      setVideoError(false);
+      return;
+    }
+
+    if (
+      src &&
+      (src.startsWith('shared_media:') || src.startsWith('local_media:') || src.startsWith('vid_'))
+    ) {
+      let active = true;
+      setIsResolvingBlob(true);
+      setVideoError(false);
+
+      // Subscribe to live download progress events
+      const unsubscribe = subscribeMediaDownloadProgress(src, (progress) => {
+        if (active) {
+          setDownloadProgress(progress);
+        }
+      });
+
+      getMediaBlobUrl(src).then((resolvedBlobUrl) => {
+        if (active) {
+          if (resolvedBlobUrl) {
+            setActiveSrc(resolvedBlobUrl);
+            setVideoError(false);
+          } else {
+            console.warn('Failed to resolve cloud media blob for video player:', src);
+            setVideoError(true);
+          }
+          setIsResolvingBlob(false);
+        }
+      });
+
+      return () => {
+        active = false;
+        unsubscribe();
+      };
+    } else if (!src) {
+      setActiveSrc('');
+      setIsResolvingBlob(false);
+    }
   }, [src, poster]);
 
   const resetControlsTimer = () => {
@@ -150,13 +215,29 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const video = videoRef.current;
     if (!video) return;
 
+    if (!isPlayableUrl(activeSrc)) {
+      if (src && !isResolvingBlob) {
+        setIsResolvingBlob(true);
+        const resolved = await getMediaBlobUrl(src);
+        if (resolved) {
+          setActiveSrc(resolved);
+          setIsResolvingBlob(false);
+          video.src = resolved;
+          video.load();
+        } else {
+          setIsResolvingBlob(false);
+          setVideoError(true);
+          return;
+        }
+      } else {
+        return;
+      }
+    }
+
     if (!video.src || video.src === window.location.href) {
       if (activeSrc) {
         video.src = activeSrc;
         video.load();
-      } else {
-        setVideoError(true);
-        return;
       }
     }
 
@@ -308,20 +389,28 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // Trigger Video Encoder API On-Demand
   const handleReEncodeVideo = async (e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    if (isEncoding || !activeSrc) return;
+    const targetSource = activeSrc || src;
+    if (isEncoding || !targetSource) return;
 
     setIsEncoding(true);
     setEncodingProgress(0);
     setEncodingPhase('Starting Video Encoder Pipeline...');
 
     try {
-      let sourceBlob: Blob;
-      if (activeSrc.startsWith('data:')) {
-        const res = await fetch(activeSrc);
+      let sourceBlob: Blob | null = null;
+      if (targetSource.startsWith('data:') || targetSource.startsWith('blob:') || targetSource.startsWith('http')) {
+        const res = await fetch(targetSource);
         sourceBlob = await res.blob();
       } else {
-        const res = await fetch(activeSrc);
-        sourceBlob = await res.blob();
+        const resolved = await getMediaBlobUrl(targetSource);
+        if (resolved) {
+          const res = await fetch(resolved);
+          sourceBlob = await res.blob();
+        }
+      }
+
+      if (!sourceBlob) {
+        throw new Error('Unable to acquire media stream buffer');
       }
 
       const result = await encodeVideoBlob(sourceBlob, {
@@ -337,6 +426,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       setEncodedResult(result);
       setActiveSrc(result.url);
+      setVideoError(false);
       if (result.posterUrl) {
         setActivePoster(result.posterUrl);
       }
@@ -353,7 +443,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   };
 
-  // 1-Click Download Video
+  // 1-Click Download Video with live accumulation
   const handleDownloadClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
     resetControlsTimer();
@@ -367,11 +457,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         await onDownload();
       } else {
         await downloadMediaFile({
-          urlOrKey: activeSrc,
-          mediaUrl: activeSrc,
+          urlOrKey: activeSrc || src,
+          mediaUrl: src,
+          rawKey: src ? src.replace(/^shared_media:/, '').replace(/^local_media:/, '') : undefined,
           fileName,
           fileFormat,
-          fileSize: encodedResult?.size || fileSize
+          fileSize: encodedResult?.size || fileSize,
+          onProgress: (p) => setDownloadProgress(p)
         });
       }
       setDownloadSuccess(true);
@@ -383,7 +475,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   };
 
-  const resolutionText = encodedResult?.resolutionLabel || getResolutionLabel(videoRef.current?.videoHeight || 720);
+  const resolutionText =
+    encodedResult?.resolutionLabel || getResolutionLabel(videoRef.current?.videoHeight || 720);
 
   return (
     <div
@@ -404,7 +497,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       >
         <video
           ref={videoRef}
-          src={activeSrc}
+          src={isPlayableUrl(activeSrc) ? activeSrc : undefined}
           poster={activePoster}
           playsInline
           {...({
@@ -426,11 +519,43 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             setIsPlaying(false);
             setShowControls(true);
           }}
-          onError={() => setVideoError(true)}
+          onError={() => {
+            if (isPlayableUrl(activeSrc)) {
+              setVideoError(true);
+            }
+          }}
           className={`w-full transition-all duration-200 ${
             fitMode === 'cover' ? 'object-cover h-full' : 'object-contain'
           } ${isFullscreen ? 'max-h-dvh h-dvh' : maxHeightClass}`}
         />
+
+        {/* Live Video Download & Buffering Accumulation Screen */}
+        {isResolvingBlob && (
+          <div className="absolute inset-0 z-30 bg-zinc-950/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-white text-center">
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center mb-3 shadow-lg shadow-emerald-500/30 animate-pulse">
+              <Film size={28} className="text-white" />
+            </div>
+            <h4 className="text-sm font-bold text-white mb-0.5 truncate max-w-xs">{fileName}</h4>
+            <p className="text-[11px] text-emerald-400 font-mono mb-3">
+              {downloadProgress && downloadProgress.loadedBytes > 0
+                ? `Downloading: ${formatBytes(downloadProgress.loadedBytes)} / ${formatBytes(
+                    downloadProgress.totalBytes || fileSize || 1024 * 1024
+                  )} (${downloadProgress.percent}%)`
+                : `Buffering ${formatBytes(fileSize || 1024 * 1024)} video stream...`}
+            </p>
+
+            <div className="w-full max-w-xs bg-zinc-800 h-2.5 rounded-full overflow-hidden p-0.5 border border-zinc-700 mb-2">
+              <div
+                className="bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-400 h-full rounded-full transition-all duration-200"
+                style={{ width: `${Math.max(6, downloadProgress?.percent || 15)}%` }}
+              />
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-zinc-400">
+              <Loader2 size={13} className="animate-spin text-emerald-400" />
+              <span>Receiving video chunks...</span>
+            </div>
+          </div>
+        )}
 
         {/* Video Encoder Processing Overlay */}
         {isEncoding && (
@@ -455,11 +580,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </div>
         )}
 
-        {/* Error Fallback Box */}
-        {videoError && !isEncoding && (
+        {/* Error Fallback Box with Active Re-Encode & Download */}
+        {videoError && !isEncoding && !isResolvingBlob && (
           <div className="absolute inset-0 z-20 bg-zinc-900/90 text-white flex flex-col items-center justify-center p-4 text-center">
             <Film size={32} className="text-emerald-400 mb-2" />
-            <p className="text-xs font-semibold">{fileName}</p>
+            <p className="text-xs font-semibold max-w-xs truncate">{fileName}</p>
             <p className="text-[11px] text-zinc-400 mt-0.5 mb-3">
               {formatBytes(fileSize || 1024 * 1024)}
             </p>
@@ -475,17 +600,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               <button
                 type="button"
                 onClick={handleDownloadClick}
+                disabled={isDownloading}
                 className="px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold flex items-center gap-1.5 cursor-pointer border border-zinc-700"
               >
-                <Download size={14} />
-                <span>Download Video</span>
+                {isDownloading ? <Loader2 size={14} className="animate-spin text-emerald-400" /> : <Download size={14} />}
+                <span>{isDownloading ? 'Downloading...' : 'Download Video'}</span>
               </button>
             </div>
           </div>
         )}
 
         {/* Center Play Button Overlay (when paused) */}
-        {!isPlaying && !isEncoding && !videoError && (
+        {!isPlaying && !isEncoding && !videoError && !isResolvingBlob && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/25 hover:bg-black/35 transition-colors pointer-events-none z-10">
             <button
               type="button"
@@ -553,7 +679,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 ) : (
                   <Download size={12} />
                 )}
-                <span>{downloadSuccess ? 'Downloaded!' : 'Download'}</span>
+                <span>
+                  {isDownloading
+                    ? downloadProgress?.percent
+                      ? `${downloadProgress.percent}%`
+                      : 'Saving...'
+                    : downloadSuccess
+                    ? 'Downloaded!'
+                    : 'Download'}
+                </span>
               </button>
             </div>
           </div>

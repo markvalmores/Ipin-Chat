@@ -403,80 +403,24 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             {/* 2. PLAYABLE ENCODED VIDEO PLAYER */}
             {isVideo && (
               <div className="rounded-2xl overflow-hidden max-w-sm bg-black relative my-1">
-                {(() => {
-                  const poster = message.posterUrl || (message.mediaUrl?.startsWith('data:image/') ? message.mediaUrl : undefined);
-                  const validSrc = resolvedBlobUrl || (
-                    message.mediaUrl &&
-                    !message.mediaUrl.startsWith('data:image/') &&
-                    !message.mediaUrl.startsWith('local_media:') &&
-                    !message.mediaUrl.startsWith('shared_media:')
-                      ? message.mediaUrl
-                      : null
-                  );
-
-                  if (validSrc) {
-                    return (
-                      <VideoPlayer
-                        src={validSrc}
-                        poster={poster}
-                        fileName={message.fileName || 'Encoded_Video.mp4'}
-                        fileFormat={message.fileFormat || 'mp4'}
-                        fileSize={message.fileSize || 0}
-                        maxHeightClass="max-h-72"
-                        onDownload={() => downloadMediaFile({
-                          urlOrKey: validSrc || message.mediaUrl || '',
-                          mediaUrl: message.mediaUrl,
-                          rawKey: message.mediaUrl?.replace(/^shared_media:/, '').replace(/^local_media:/, ''),
-                          fileName: message.fileName,
-                          fileFormat: message.fileFormat,
-                          fileSize: message.fileSize
-                        })}
-                      />
-                    );
+                <VideoPlayer
+                  src={resolvedBlobUrl || message.mediaUrl || ''}
+                  poster={message.posterUrl || (message.mediaUrl?.startsWith('data:image/') ? message.mediaUrl : undefined)}
+                  fileName={message.fileName || 'Encoded_Video.mp4'}
+                  fileFormat={message.fileFormat || 'mp4'}
+                  fileSize={message.fileSize || 0}
+                  maxHeightClass="max-h-72"
+                  onDownload={() =>
+                    downloadMediaFile({
+                      urlOrKey: resolvedBlobUrl || message.mediaUrl || '',
+                      mediaUrl: message.mediaUrl,
+                      rawKey: message.mediaUrl?.replace(/^shared_media:/, '').replace(/^local_media:/, ''),
+                      fileName: message.fileName,
+                      fileFormat: message.fileFormat,
+                      fileSize: message.fileSize
+                    })
                   }
-
-                  // If resolving blob key from cloud or local store
-                  return (
-                    <div
-                      className="relative cursor-pointer group/vid rounded-2xl overflow-hidden bg-zinc-900 border border-zinc-800 p-2 min-h-[160px] flex items-center justify-center"
-                      onClick={async () => {
-                        let finalSrc = validSrc;
-                        if (!finalSrc && message.mediaUrl) {
-                          const key = message.mediaUrl.replace(/^shared_media:/, '').replace(/^local_media:/, '');
-                          const url = await getMediaBlobUrl(key);
-                          if (url) {
-                            setResolvedBlobUrl(url);
-                            finalSrc = url;
-                          }
-                        }
-                        onPreviewMedia({
-                          url: finalSrc || poster || message.mediaUrl || '',
-                          type: 'video',
-                          name: message.fileName,
-                          format: message.fileFormat,
-                          size: message.fileSize,
-                          posterUrl: poster || message.posterUrl
-                        });
-                      }}
-                    >
-                      {poster ? (
-                        <div className="relative">
-                          <img src={poster} alt="Video preview" className="max-h-72 w-full object-cover rounded-xl" />
-                          <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                            <div className="w-12 h-12 rounded-full bg-emerald-600/90 text-white flex items-center justify-center shadow-lg">
-                              <Play size={22} className="ml-0.5" />
-                            </div>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="h-44 w-full flex flex-col items-center justify-center bg-zinc-900 text-zinc-400 gap-2">
-                          <Film size={32} className="text-emerald-400 animate-pulse" />
-                          <span className="text-xs font-semibold text-emerald-300">Loading Encoded Video...</span>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })()}
+                />
               </div>
             )}
 

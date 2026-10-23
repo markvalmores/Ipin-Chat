@@ -1,6 +1,6 @@
 /**
  * Media compression, IndexedDB caching, Cross-tab BroadcastChannel sync, Firestore cloud chunk sync, and video poster generator
- * Ensures videos and photos of ANY size can be sent, played, and downloaded reliably across all browsers, sender and receiver!
+ * Ensures videos and photos of ANY size (e.g. 12.9 MB MP4) can be sent, played, and downloaded reliably across all browsers!
  */
 
 import { doc, setDoc, getDoc, collection, getDocs, query, orderBy } from 'firebase/firestore';
@@ -13,6 +13,43 @@ const DB_VERSION = 1;
 let dbPromise: Promise<IDBDatabase> | null = null;
 const objectUrlCache = new Map<string, string>();
 const blobCache = new Map<string, Blob>();
+
+export interface MediaDownloadProgress {
+  key: string;
+  loadedBytes: number;
+  totalBytes: number;
+  percent: number;
+  fileName?: string;
+}
+
+/**
+ * Listen for live download / buffering byte accumulation for a given media key
+ */
+export function subscribeMediaDownloadProgress(
+  key: string,
+  callback: (progress: MediaDownloadProgress) => void
+): () => void {
+  const cleanKey = String(key || '')
+    .replace(/^shared_media:/, '')
+    .replace(/^local_media:/, '');
+
+  const handler = (event: Event) => {
+    const detail = (event as CustomEvent<MediaDownloadProgress>).detail;
+    if (!detail) return;
+    if (
+      detail.key === cleanKey ||
+      detail.key === `shared_media:${cleanKey}` ||
+      detail.key === `local_media:${cleanKey}`
+    ) {
+      callback(detail);
+    }
+  };
+
+  window.addEventListener('ipin_media_download_progress', handler);
+  return () => {
+    window.removeEventListener('ipin_media_download_progress', handler);
+  };
+}
 
 function openDB(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
@@ -46,24 +83,28 @@ try {
 
       if (data.type === 'OFFER_MEDIA' && data.key && data.blob) {
         try {
-          const cleanKey = String(data.key).replace(/^local_media:/, '');
+          const cleanKey = String(data.key).replace(/^local_media:/, '').replace(/^shared_media:/, '');
           const url = URL.createObjectURL(data.blob);
           objectUrlCache.set(cleanKey, url);
           objectUrlCache.set(`local_media:${cleanKey}`, url);
+          objectUrlCache.set(`shared_media:${cleanKey}`, url);
           blobCache.set(cleanKey, data.blob);
           blobCache.set(`local_media:${cleanKey}`, data.blob);
+          blobCache.set(`shared_media:${cleanKey}`, data.blob);
 
           const db = await openDB();
           const tx = db.transaction(STORE_NAME, 'readwrite');
           tx.objectStore(STORE_NAME).put(data.blob, cleanKey);
           tx.oncomplete = () => {
-            window.dispatchEvent(new CustomEvent('ipin_media_blob_ready', { detail: { key: cleanKey, url, blob: data.blob } }));
+            window.dispatchEvent(
+              new CustomEvent('ipin_media_blob_ready', { detail: { key: cleanKey, url, blob: data.blob } })
+            );
           };
         } catch (e) {
           console.warn('Failed to save offered media blob:', e);
         }
       } else if (data.type === 'REQUEST_MEDIA' && data.key) {
-        const cleanKey = String(data.key).replace(/^local_media:/, '');
+        const cleanKey = String(data.key).replace(/^local_media:/, '').replace(/^shared_media:/, '');
         try {
           if (blobCache.has(cleanKey) && mediaChannel) {
             mediaChannel.postMessage({
@@ -106,6 +147,21 @@ export async function blobToBase64(blob: Blob): Promise<string> {
     reader.onerror = reject;
     reader.readAsDataURL(blob);
   });
+}
+
+/**
+ * Decodes a Base64 string chunk into a Uint8Array with zero call stack memory overhead
+ */
+export function decodeBase64ToUint8Array(b64: string): Uint8Array {
+  // Clean padding or carriage returns if any
+  const cleanB64 = b64.replace(/[\r\n\s]/g, '');
+  const binaryStr = atob(cleanB64);
+  const len = binaryStr.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryStr.charCodeAt(i);
+  }
+  return bytes;
 }
 
 /**
@@ -162,7 +218,7 @@ export async function storeMediaBlob(key: string, blob: Blob): Promise<string> {
 
 /**
  * Saves a media blob to Firestore cloud chunks and local IndexedDB, returning
- * an embedded Data URL (for fast small videos <= 700KB) or 'shared_media:{key}'
+ * an embedded Data URL (for fast small videos <= 500KB) or 'shared_media:{key}'
  * so both users on any device or browser can instantly play and download it!
  */
 export async function storeSharedMediaToCloud(
@@ -177,41 +233,61 @@ export async function storeSharedMediaToCloud(
   // 1. Cache locally first for instant sender playback
   await storeMediaBlob(cleanKey, blob);
 
-  // 2. If small enough (<= 700 KB), return embedded data URL for instant 0-roundtrip sync!
-  if (blob.size <= 700 * 1024) {
+  // 2. If small enough (<= 500 KB), return embedded data URL for instant 0-roundtrip sync!
+  if (blob.size <= 500 * 1024) {
     const dataUrl = await blobToBase64(blob);
     return dataUrl;
   }
 
-  // 3. For larger video, upload chunks to Firestore shared_media collection
+  // 3. For larger video, upload chunks in controlled batches of 3 to avoid mobile 4G drops
   try {
     const fullDataUrl = await blobToBase64(blob);
     const b64Data = fullDataUrl.includes(',') ? fullDataUrl.split(',')[1] : fullDataUrl;
-    const CHUNK_SIZE = 350000; // ~260 KB per chunk
+    
+    // 600,000 characters is a multiple of 4 (600,000 % 4 === 0) and is ~450 KB binary, safely within Firestore 1MB doc limit
+    const CHUNK_SIZE = 600000;
     const totalChunks = Math.ceil(b64Data.length / CHUNK_SIZE);
+    const mimeType = blob.type || (options?.fileFormat ? `video/${options.fileFormat}` : 'video/mp4');
+    const fileName = options?.fileName || 'Video_Message.mp4';
+    const fileSize = blob.size;
 
     // Parent metadata doc
     await setDoc(doc(db, 'shared_media', cleanKey), {
       id: cleanKey,
-      mimeType: blob.type || (options?.fileFormat ? `video/${options.fileFormat}` : 'video/mp4'),
-      fileName: options?.fileName || 'Video_Message.mp4',
-      fileSize: blob.size,
+      mimeType,
+      fileName,
+      fileSize,
       totalChunks,
       createdAt: new Date().toISOString()
     });
 
-    // Upload chunks in parallel
-    const chunkPromises: Promise<any>[] = [];
-    for (let i = 0; i < totalChunks; i++) {
-      const chunkPart = b64Data.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-      chunkPromises.push(
-        setDoc(doc(db, 'shared_media', cleanKey, 'chunks', String(i)), {
-          index: i,
-          data: chunkPart
-        })
-      );
+    // Upload chunks in small batches of 3 with retry to protect mobile connections
+    const BATCH_SIZE = 3;
+    for (let i = 0; i < totalChunks; i += BATCH_SIZE) {
+      const batchPromises: Promise<any>[] = [];
+      const end = Math.min(i + BATCH_SIZE, totalChunks);
+      
+      for (let j = i; j < end; j++) {
+        const chunkPart = b64Data.slice(j * CHUNK_SIZE, (j + 1) * CHUNK_SIZE);
+        const chunkDocRef = doc(db, 'shared_media', cleanKey, 'chunks', String(j));
+        batchPromises.push(
+          setDoc(chunkDocRef, {
+            index: j,
+            data: chunkPart
+          })
+        );
+      }
+
+      // Execute batch
+      try {
+        await Promise.all(batchPromises);
+      } catch (batchErr) {
+        console.warn(`Retry chunk batch ${i} to ${end}:`, batchErr);
+        // Small retry delay
+        await new Promise((r) => setTimeout(r, 400));
+        await Promise.all(batchPromises);
+      }
     }
-    await Promise.all(chunkPromises);
 
     return `shared_media:${cleanKey}`;
   } catch (err) {
@@ -221,8 +297,8 @@ export async function storeSharedMediaToCloud(
 }
 
 /**
- * Retrieve the original uncompressed binary Blob for an exact file download
- * Checks memory -> IndexedDB -> Firestore shared_media cloud -> BroadcastChannel
+ * Retrieve the original uncompressed binary Blob for an exact file download and playback.
+ * Checks memory -> IndexedDB -> Firestore shared_media cloud (with live byte accumulation) -> BroadcastChannel
  */
 export async function getMediaBlob(key: string): Promise<Blob | null> {
   if (!key) return null;
@@ -254,36 +330,104 @@ export async function getMediaBlob(key: string): Promise<Blob | null> {
 
     if (blob) {
       blobCache.set(cleanKey, blob);
+      blobCache.set(`shared_media:${cleanKey}`, blob);
+      blobCache.set(`local_media:${cleanKey}`, blob);
       return blob;
     }
   } catch (e) {
     // Continue to cloud
   }
 
-  // 2. Fetch from Firestore shared_media cloud storage
+  // 2. Fetch from Firestore shared_media cloud storage with progressive byte accumulation
   try {
     const mediaDocRef = doc(db, 'shared_media', cleanKey);
     const mediaDocSnap = await getDoc(mediaDocRef);
     if (mediaDocSnap.exists()) {
       const meta = mediaDocSnap.data();
-      const chunksSnap = await getDocs(
-        query(collection(db, 'shared_media', cleanKey, 'chunks'), orderBy('index', 'asc'))
-      );
-      if (!chunksSnap.empty) {
-        const sortedChunks = chunksSnap.docs
-          .map((d) => d.data())
-          .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
-        const combinedB64 = sortedChunks.map((c) => c.data || '').join('');
-        const mimeType = meta.mimeType || 'video/mp4';
-        const binaryStr = atob(combinedB64);
-        const len = binaryStr.length;
-        const bytes = new Uint8Array(len);
-        for (let i = 0; i < len; i++) {
-          bytes[i] = binaryStr.charCodeAt(i);
-        }
-        const cloudBlob = new Blob([bytes], { type: mimeType });
+      const mimeType = meta.mimeType || 'video/mp4';
+      const totalChunks = meta.totalChunks || 1;
+      const expectedTotalBytes = meta.fileSize || 0;
 
-        // Cache in local IndexedDB so subsequent views are instant!
+      // Notify start of download
+      window.dispatchEvent(
+        new CustomEvent('ipin_media_download_progress', {
+          detail: {
+            key: cleanKey,
+            loadedBytes: 0,
+            totalBytes: expectedTotalBytes,
+            percent: 0,
+            fileName: meta.fileName
+          }
+        })
+      );
+
+      const chunkByteArrays: Uint8Array[] = new Array(totalChunks);
+      let accumulatedBytes = 0;
+
+      // Fetch chunks in batches of 4
+      const BATCH_SIZE = 4;
+      for (let i = 0; i < totalChunks; i += BATCH_SIZE) {
+        const batchIndices: number[] = [];
+        const end = Math.min(i + BATCH_SIZE, totalChunks);
+        for (let j = i; j < end; j++) {
+          batchIndices.push(j);
+        }
+
+        const chunkDocSnaps = await Promise.all(
+          batchIndices.map((idx) =>
+            getDoc(doc(db, 'shared_media', cleanKey, 'chunks', String(idx)))
+          )
+        );
+
+        for (const cDoc of chunkDocSnaps) {
+          if (cDoc.exists()) {
+            const chunkData = cDoc.data();
+            const chunkIndex = typeof chunkData.index === 'number' ? chunkData.index : 0;
+            if (chunkData.data) {
+              const chunkBytes = decodeBase64ToUint8Array(chunkData.data);
+              chunkByteArrays[chunkIndex] = chunkBytes;
+              accumulatedBytes += chunkBytes.byteLength;
+            }
+          }
+        }
+
+        // Live download accumulation event
+        const progressPercent = expectedTotalBytes > 0
+          ? Math.min(100, Math.round((accumulatedBytes / expectedTotalBytes) * 100))
+          : Math.min(100, Math.round((end / totalChunks) * 100));
+
+        window.dispatchEvent(
+          new CustomEvent('ipin_media_download_progress', {
+            detail: {
+              key: cleanKey,
+              loadedBytes: accumulatedBytes,
+              totalBytes: expectedTotalBytes || accumulatedBytes,
+              percent: progressPercent,
+              fileName: meta.fileName
+            }
+          })
+        );
+      }
+
+      // Check if all chunks were loaded
+      const validByteArrays = chunkByteArrays.filter((b): b is Uint8Array => b instanceof Uint8Array);
+      if (validByteArrays.length > 0) {
+        const cloudBlob = new Blob(validByteArrays as BlobPart[], { type: mimeType });
+
+        // Final 100% download event
+        window.dispatchEvent(
+          new CustomEvent('ipin_media_download_progress', {
+            detail: {
+              key: cleanKey,
+              loadedBytes: cloudBlob.size,
+              totalBytes: cloudBlob.size,
+              percent: 100,
+              fileName: meta.fileName
+            }
+          })
+        );
+
+        // Cache in local IndexedDB so subsequent views and downloads are instant!
         await storeMediaBlob(cleanKey, cloudBlob);
         return cloudBlob;
       }
@@ -292,7 +436,7 @@ export async function getMediaBlob(key: string): Promise<Blob | null> {
     console.warn('Firestore shared media fetch error:', err);
   }
 
-  // 3. Request from sender tab via BroadcastChannel fallback
+  // 3. Fallback: BroadcastChannel request from sender tab
   if (mediaChannel) {
     try {
       mediaChannel.postMessage({ type: 'REQUEST_MEDIA', key: cleanKey });
@@ -387,14 +531,15 @@ export interface DownloadMediaOptions {
   fileName?: string;
   fileFormat?: string;
   fileSize?: number;
+  onProgress?: (progress: MediaDownloadProgress) => void;
 }
 
 /**
  * Downloads the exact binary file with exact byte length and filename!
- * Works across local blobs, IndexedDB cache, Base64 data URLs, and relative/remote URLs.
+ * Works across local blobs, IndexedDB cache, Base64 data URLs, and Firestore chunks.
  */
 export async function downloadMediaFile(options: DownloadMediaOptions): Promise<boolean> {
-  const { urlOrKey, rawKey, mediaUrl, fileName, fileFormat } = options;
+  const { urlOrKey, rawKey, mediaUrl, fileName, fileFormat, onProgress } = options;
   if (!urlOrKey && !rawKey && !mediaUrl) return false;
 
   let blob: Blob | null = null;
@@ -406,6 +551,12 @@ export async function downloadMediaFile(options: DownloadMediaOptions): Promise<
   if (mediaUrl) candidateKeys.push(mediaUrl.replace(/^shared_media:/, '').replace(/^local_media:/, ''));
   if (target) candidateKeys.push(target.replace(/^shared_media:/, '').replace(/^local_media:/, ''));
 
+  // Subscribe to progress if handler provided
+  let unsubscribe: (() => void) | null = null;
+  if (onProgress && candidateKeys[0]) {
+    unsubscribe = subscribeMediaDownloadProgress(candidateKeys[0], onProgress);
+  }
+
   try {
     // 1. Check blobCache and IndexedDB for exact original Blob
     for (const key of candidateKeys) {
@@ -414,12 +565,10 @@ export async function downloadMediaFile(options: DownloadMediaOptions): Promise<
         blob = blobCache.get(key)!;
         break;
       }
-      if (key.startsWith('vid_') || !key.includes('/')) {
-        const found = await getMediaBlob(key);
-        if (found) {
-          blob = found;
-          break;
-        }
+      const found = await getMediaBlob(key);
+      if (found) {
+        blob = found;
+        break;
       }
     }
 
@@ -430,13 +579,8 @@ export async function downloadMediaFile(options: DownloadMediaOptions): Promise<
         const mimeMatch = parts[0].match(/:(.*?);/);
         const mimeType = mimeMatch ? mimeMatch[1] : (fileFormat ? `video/${fileFormat}` : 'video/mp4');
         const b64Data = parts[1];
-        const binaryStr = atob(b64Data);
-        const len = binaryStr.length;
-        const bytes = new Uint8Array(len);
-        for (let i = 0; i < len; i++) {
-          bytes[i] = binaryStr.charCodeAt(i);
-        }
-        blob = new Blob([bytes], { type: mimeType });
+        const bytes = decodeBase64ToUint8Array(b64Data);
+        blob = new Blob([bytes as unknown as BlobPart], { type: mimeType });
       }
     }
 
@@ -488,7 +632,7 @@ export async function downloadMediaFile(options: DownloadMediaOptions): Promise<
         URL.revokeObjectURL(objectUrl);
       }, 5000);
       return true;
-    } else {
+    } else if (target && (target.startsWith('http') || target.startsWith('blob:') || target.startsWith('/'))) {
       // Direct anchor trigger as fallback
       const a = document.createElement('a');
       a.style.display = 'none';
@@ -503,9 +647,13 @@ export async function downloadMediaFile(options: DownloadMediaOptions): Promise<
       }, 5000);
       return true;
     }
+
+    return false;
   } catch (err) {
     console.error('downloadMediaFile error:', err);
     return false;
+  } finally {
+    if (unsubscribe) unsubscribe();
   }
 }
 

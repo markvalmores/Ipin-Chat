@@ -13,7 +13,12 @@ import {
   Check,
   Share2
 } from 'lucide-react';
-import { getMediaBlobUrl, downloadMediaFile } from '../utils/mediaStore';
+import {
+  getMediaBlobUrl,
+  downloadMediaFile,
+  subscribeMediaDownloadProgress,
+  MediaDownloadProgress
+} from '../utils/mediaStore';
 import { VideoPlayer } from './VideoPlayer';
 
 interface MediaPreviewModalProps {
@@ -49,6 +54,7 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
   const [showControls, setShowControls] = useState(true);
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadSuccess, setDownloadSuccess] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState<MediaDownloadProgress | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const controlsTimeoutRef = useRef<number | null>(null);
@@ -81,10 +87,11 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
       const ok = await downloadMediaFile({
         urlOrKey: targetSource,
         mediaUrl: mediaUrl,
-        rawKey: mediaUrl ? mediaUrl.replace(/^local_media:/, '') : undefined,
+        rawKey: mediaUrl ? mediaUrl.replace(/^shared_media:/, '').replace(/^local_media:/, '') : undefined,
         fileName,
         fileFormat,
-        fileSize
+        fileSize,
+        onProgress: (p) => setDownloadProgress(p)
       });
       if (ok) {
         setDownloadSuccess(true);
@@ -102,6 +109,7 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
     if (!isOpen) {
       setIsPlaying(false);
       setVideoError(false);
+      setDownloadProgress(null);
       return;
     }
 
@@ -112,10 +120,35 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
 
     const target = mediaUrl || '';
 
-    if (target.startsWith('local_media:') || target.startsWith('shared_media:') || target.startsWith('vid_')) {
+    // Direct URLs (data:, blob:, http:, etc.)
+    if (
+      target.startsWith('http://') ||
+      target.startsWith('https://') ||
+      target.startsWith('blob:') ||
+      target.startsWith('/') ||
+      target.startsWith('./')
+    ) {
+      setResolvedUrl(target);
+      setIsLoading(false);
+      return;
+    }
+
+    if (
+      target.startsWith('local_media:') ||
+      target.startsWith('shared_media:') ||
+      target.startsWith('vid_') ||
+      target.startsWith('img_') ||
+      target.startsWith('file_')
+    ) {
       const key = target.replace(/^shared_media:/, '').replace(/^local_media:/, '');
       setIsLoading(true);
-      setResolvedUrl(''); // Do not set raw key as video src to avoid HTML5 video crash
+      setResolvedUrl('');
+
+      const unsubscribe = subscribeMediaDownloadProgress(key, (progress) => {
+        if (active) {
+          setDownloadProgress(progress);
+        }
+      });
 
       getMediaBlobUrl(key).then((url) => {
         if (active) {
@@ -124,7 +157,6 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
             setVideoError(false);
           } else {
             console.warn('Could not resolve media blob for key:', key);
-            // If we have a poster, we can still show the poster frame
             if (!effectivePoster) {
               setVideoError(true);
             }
@@ -132,8 +164,12 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
           setIsLoading(false);
         }
       });
+
+      return () => {
+        active = false;
+        unsubscribe();
+      };
     } else if (target.startsWith('data:image/')) {
-      // If mediaUrl was passed as poster dataUrl, check if it's an image or video
       if (isVideo) {
         setResolvedUrl('');
         setIsLoading(false);
@@ -149,70 +185,7 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
     return () => {
       active = false;
     };
-  }, [isOpen, mediaUrl, isVideo]);
-
-  // Handle play/pause toggle with resilient fallback
-  const handleTogglePlay = async (e?: React.MouseEvent) => {
-    if (e) {
-      e.stopPropagation();
-      e.preventDefault();
-    }
-    const video = videoRef.current;
-    if (!video) return;
-
-    if (video.paused || video.ended) {
-      // If src is missing on element, set it
-      if (!video.src && resolvedUrl) {
-        video.src = resolvedUrl;
-      }
-
-      try {
-        await video.play();
-        setIsPlaying(true);
-        setVideoError(false);
-      } catch (err: any) {
-        console.warn('Playback blocked or failed, retrying with muted sound:', err);
-        try {
-          video.muted = true;
-          setIsMuted(true);
-          await video.play();
-          setIsPlaying(true);
-          setVideoError(false);
-        } catch (innerErr) {
-          console.error('Final video play error:', innerErr);
-        }
-      }
-    } else {
-      video.pause();
-      setIsPlaying(false);
-    }
-  };
-
-  const handleToggleMute = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!videoRef.current) return;
-    const nextMuted = !videoRef.current.muted;
-    videoRef.current.muted = nextMuted;
-    setIsMuted(nextMuted);
-  };
-
-  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const time = parseFloat(e.target.value);
-    setCurrentTime(time);
-    if (videoRef.current) {
-      videoRef.current.currentTime = time;
-    }
-  };
-
-  const handleToggleFullscreen = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!videoRef.current) return;
-    if (document.fullscreenElement) {
-      document.exitFullscreen?.();
-    } else {
-      videoRef.current.requestFullscreen?.();
-    }
-  };
+  }, [isOpen, mediaUrl, isVideo, effectivePoster]);
 
   const handleMouseMove = () => {
     setShowControls(true);
@@ -226,13 +199,6 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
     }
   };
 
-  const formatTime = (seconds: number) => {
-    if (isNaN(seconds) || seconds < 0) return '0:00';
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
-  };
-
   const formatFileSize = (bytes?: number) => {
     if (!bytes) return '';
     if (bytes < 1024) return `${bytes} B`;
@@ -241,15 +207,6 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
   };
 
   if (!isOpen) return null;
-
-  const playableVideoSrc =
-    resolvedUrl &&
-    !resolvedUrl.startsWith('data:image/') &&
-    !resolvedUrl.startsWith('local_media:') &&
-    !resolvedUrl.startsWith('shared_media:') &&
-    !resolvedUrl.startsWith('vid_')
-      ? resolvedUrl
-      : undefined;
 
   return (
     <div
@@ -272,10 +229,20 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
           {fileSize ? (
             <span className="hidden sm:inline text-xs text-zinc-400">({formatFileSize(fileSize)})</span>
           ) : null}
+
+          {/* Live downloading indicator badge in header */}
+          {(isLoading || isDownloading) && downloadProgress && downloadProgress.loadedBytes > 0 && (
+            <span className="hidden md:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 text-[11px] font-mono">
+              <Loader2 size={11} className="animate-spin text-emerald-400" />
+              <span>
+                {formatFileSize(downloadProgress.loadedBytes)} / {formatFileSize(downloadProgress.totalBytes || fileSize)} ({downloadProgress.percent}%)
+              </span>
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
-          {(playableVideoSrc || resolvedUrl || mediaUrl) && (
+          {(resolvedUrl || mediaUrl) && (
             <button
               type="button"
               onClick={handleDownload}
@@ -296,7 +263,9 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
               )}
               <span>
                 {isDownloading
-                  ? 'Saving...'
+                  ? downloadProgress?.percent
+                    ? `${downloadProgress.percent}%`
+                    : 'Saving...'
                   : downloadSuccess
                   ? 'Downloaded!'
                   : 'Download'}
@@ -336,21 +305,28 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
         onClick={(e) => e.stopPropagation()}
       >
         {/* 1. PHOTO LIGHTBOX */}
-        {isImage && resolvedUrl && (
-          <img
-            src={resolvedUrl}
-            alt={fileName || 'Attachment preview'}
-            referrerPolicy="no-referrer"
-            crossOrigin="anonymous"
-            className="max-w-full max-h-[80vh] object-contain rounded-2xl shadow-2xl"
-          />
+        {isImage && (
+          resolvedUrl ? (
+            <img
+              src={resolvedUrl}
+              alt={fileName || 'Attachment preview'}
+              referrerPolicy="no-referrer"
+              crossOrigin="anonymous"
+              className="max-w-full max-h-[80vh] object-contain rounded-2xl shadow-2xl"
+            />
+          ) : (
+            <div className="flex flex-col items-center justify-center p-8 bg-zinc-900 rounded-2xl gap-3">
+              <Loader2 size={24} className="animate-spin text-emerald-400" />
+              <span className="text-xs text-zinc-300">Loading photo...</span>
+            </div>
+          )
         )}
 
         {/* 2. REAL INTERACTIVE ENCODED VIDEO PLAYER */}
         {isVideo && (
           <div className="relative w-full max-h-[80vh] flex flex-col items-center justify-center">
             <VideoPlayer
-              src={playableVideoSrc || resolvedUrl || mediaUrl}
+              src={resolvedUrl || mediaUrl}
               poster={effectivePoster}
               fileName={fileName || 'Video_Message.mp4'}
               fileFormat={fileFormat || 'mp4'}
