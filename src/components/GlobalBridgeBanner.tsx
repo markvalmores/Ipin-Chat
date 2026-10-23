@@ -12,7 +12,7 @@ export const GlobalBridgeBanner: React.FC<GlobalBridgeBannerProps> = ({ onOpenAu
   if (isDismissed) return null;
 
   return (
-    <div className="bg-gradient-to-r from-emerald-900 via-teal-900 to-emerald-950 text-white text-xs px-4 py-1.5 border-b border-emerald-500/20 flex items-center justify-between shadow-xs">
+    <div className="bg-gradient-to-r from-emerald-900 via-teal-900 to-emerald-950 text-white text-xs px-2.5 sm:px-4 py-1.5 border-b border-emerald-500/20 flex items-center justify-between shadow-xs w-full max-w-full overflow-hidden">
       <div className="flex items-center gap-2 overflow-hidden">
         <span className="flex h-2 w-2 relative">
           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />

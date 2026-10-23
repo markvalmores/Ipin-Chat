@@ -18,7 +18,6 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { translateText, translateTextAsync } from '../utils/translator';
 import { compressImageForUpload, captureVideoPoster, storeMediaBlob, storeSharedMediaToCloud } from '../utils/mediaStore';
-import { encodeVideoBlob } from '../utils/videoEncoder';
 import { GifPickerModal } from './GifPickerModal';
 import { TenorGif } from '../services/tenorService';
 
@@ -235,8 +234,13 @@ export const MessageInput: React.FC<MessageInputProps> = ({
             fileSize: selectedFile.file.size
           });
         } else if (selectedFile.type === 'video') {
-          // Extract poster thumbnail frame
-          posterUrl = (await captureVideoPoster(selectedFile.file)) || undefined;
+          // Extract poster thumbnail frame with safe 1000ms max timeout
+          const posterPromise = Promise.race([
+            captureVideoPoster(selectedFile.file),
+            new Promise<string>((r) => setTimeout(() => r(''), 1000))
+          ]);
+          posterUrl = (await posterPromise) || undefined;
+
           const mediaKey = `vid_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
 
           // Store exact original video file (MP4, WebM, MOV, etc.) into cloud chunks + local IndexedDB
@@ -283,43 +287,43 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   };
 
   return (
-    <div className="relative border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2.5 sm:px-4">
-      {/* File preview banner before sending */}
+    <div className="relative border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-2 sm:px-4 py-2 sm:py-2.5 w-full max-w-full overflow-hidden">
+      {/* File preview banner before sending - truncated to prevent overflow */}
       {selectedFile && (
-        <div className="mb-2 p-2.5 rounded-2xl bg-zinc-100 dark:bg-zinc-800/80 border border-emerald-500/30 flex items-center justify-between gap-3 animate-in slide-in-from-bottom-2 duration-150">
-          <div className="flex items-center gap-3 overflow-hidden">
+        <div className="mb-2 p-2 sm:p-2.5 rounded-2xl bg-zinc-100 dark:bg-zinc-800/80 border border-emerald-500/30 flex items-center justify-between gap-2 animate-in slide-in-from-bottom-2 duration-150 w-full max-w-full overflow-hidden">
+          <div className="flex items-center gap-2.5 min-w-0 flex-1 overflow-hidden">
             {selectedFile.type === 'image' && (
               <img
                 src={selectedFile.previewUrl}
                 alt="Upload preview"
-                className="w-12 h-12 rounded-xl object-cover ring-1 ring-zinc-300 dark:ring-zinc-700"
+                className="w-10 h-10 rounded-xl object-cover ring-1 ring-zinc-300 dark:ring-zinc-700 shrink-0"
               />
             )}
             {selectedFile.type === 'video' && (
-              <div className="w-12 h-12 rounded-xl bg-emerald-950 text-emerald-400 flex items-center justify-center font-bold">
-                <Film size={22} />
+              <div className="w-10 h-10 rounded-xl bg-emerald-950 text-emerald-400 flex items-center justify-center font-bold shrink-0">
+                <Film size={20} />
               </div>
             )}
             {selectedFile.type === 'audio' && (
-              <div className="w-12 h-12 rounded-xl bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
-                <Mic size={22} />
+              <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                <Mic size={20} />
               </div>
             )}
             {selectedFile.type === 'file' && (
-              <div className="w-12 h-12 rounded-xl bg-zinc-200 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300 flex items-center justify-center font-mono text-xs font-bold uppercase">
+              <div className="w-10 h-10 rounded-xl bg-zinc-200 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300 flex items-center justify-center font-mono text-xs font-bold uppercase shrink-0">
                 {selectedFile.format}
               </div>
             )}
 
-            <div className="min-w-0">
-              <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-200 truncate">
+            <div className="min-w-0 flex-1 overflow-hidden">
+              <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-200 truncate max-w-[130px] xs:max-w-[180px] sm:max-w-xs">
                 {selectedFile.name}
               </p>
-              <div className="flex items-center gap-1.5 text-[11px] text-zinc-500">
-                <span className="uppercase text-emerald-600 dark:text-emerald-400 font-bold">{selectedFile.format}</span>
+              <div className="flex items-center gap-1 text-[10px] sm:text-[11px] text-zinc-500 truncate">
+                <span className="uppercase text-emerald-600 dark:text-emerald-400 font-bold shrink-0">{selectedFile.format}</span>
                 <span>•</span>
-                <span>{(selectedFile.size / 1024).toFixed(1)} KB</span>
-                <span className="text-emerald-500 font-medium ml-1">Ready to send</span>
+                <span className="shrink-0">{(selectedFile.size / 1024).toFixed(1)} KB</span>
+                <span className="text-emerald-500 font-medium ml-0.5 shrink-0">Ready</span>
               </div>
             </div>
           </div>
@@ -327,7 +331,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           <button
             type="button"
             onClick={() => setSelectedFile(null)}
-            className="p-1.5 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-600"
+            className="p-1.5 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-600 shrink-0"
           >
             <X size={16} />
           </button>
@@ -336,26 +340,26 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
       {/* Recording in progress overlay */}
       {isRecording && (
-        <div className="mb-2 p-3 rounded-2xl bg-red-500/10 border border-red-500/30 flex items-center justify-between text-red-500 animate-pulse">
-          <div className="flex items-center gap-2">
-            <span className="w-3 h-3 rounded-full bg-red-500 animate-ping" />
-            <span className="text-xs font-semibold">Recording voice memo: {formatSeconds(recordingSeconds)}</span>
+        <div className="mb-2 p-2.5 rounded-2xl bg-red-500/10 border border-red-500/30 flex items-center justify-between text-red-500 animate-pulse w-full max-w-full overflow-hidden">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping shrink-0" />
+            <span className="text-xs font-semibold truncate">Recording: {formatSeconds(recordingSeconds)}</span>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 shrink-0">
             <button
               type="button"
               onClick={cancelRecording}
-              className="text-xs px-2.5 py-1 rounded-lg bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-300"
+              className="text-xs px-2 py-1 rounded-lg bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-300"
             >
               Cancel
             </button>
             <button
               type="button"
               onClick={stopRecording}
-              className="text-xs px-3 py-1 rounded-lg bg-red-500 text-white font-medium flex items-center gap-1"
+              className="text-xs px-2.5 py-1 rounded-lg bg-red-500 text-white font-medium flex items-center gap-1"
             >
-              <Square size={12} fill="currentColor" />
-              Stop & Attach
+              <Square size={11} fill="currentColor" />
+              <span>Attach</span>
             </button>
           </div>
         </div>
@@ -363,7 +367,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
 
       {/* Floating Emoji Picker */}
       {showEmojiPicker && (
-        <div className="absolute bottom-16 left-4 z-30 p-3 bg-white dark:bg-zinc-800 rounded-2xl shadow-xl border border-zinc-200 dark:border-zinc-700 w-72 animate-in zoom-in-95 duration-150">
+        <div className="absolute bottom-16 left-2 sm:left-4 z-30 p-3 bg-white dark:bg-zinc-800 rounded-2xl shadow-xl border border-zinc-200 dark:border-zinc-700 w-64 sm:w-72 animate-in zoom-in-95 duration-150">
           <div className="flex items-center justify-between pb-2 mb-2 border-b border-zinc-100 dark:border-zinc-700 text-xs font-semibold text-zinc-500">
             <span>Quick Emojis</span>
             <button onClick={() => setShowEmojiPicker(false)}>
@@ -388,8 +392,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         </div>
       )}
 
-      {/* Input controls container */}
-      <div className="flex items-center gap-1.5 sm:gap-2">
+      {/* Input controls container - Guaranteed fit on every mobile screen */}
+      <div className="flex items-center gap-1 sm:gap-2 w-full max-w-full overflow-hidden">
         {/* Hidden unified file input supporting PNG, GIF, JPG, BMP, APNG, MP4, AVI, FLV, SWF, any file! */}
         <input
           type="file"
@@ -403,20 +407,20 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
-          className="p-2 rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-800 text-emerald-600 dark:text-emerald-400 transition-colors"
+          className="p-1.5 sm:p-2 rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-800 text-emerald-600 dark:text-emerald-400 transition-colors shrink-0"
           title="Send photo (PNG, GIF, JPG, BMP, APNG) or video (MP4, AVI, FLV, SWF)"
         >
-          <ImageIcon size={20} />
+          <ImageIcon size={19} />
         </button>
 
         {/* Tenor GIF Search & Send */}
         <button
           type="button"
           onClick={() => setShowGifPicker(true)}
-          className="px-2.5 py-1 rounded-xl bg-teal-50 dark:bg-teal-950/40 hover:bg-teal-100 dark:hover:bg-teal-900/60 text-teal-700 dark:text-teal-300 font-mono font-bold text-xs border border-teal-500/20 transition-all flex items-center gap-1 shadow-xs"
+          className="px-2 py-1 sm:px-2.5 sm:py-1 rounded-xl bg-teal-50 dark:bg-teal-950/40 hover:bg-teal-100 dark:hover:bg-teal-900/60 text-teal-700 dark:text-teal-300 font-mono font-bold text-xs border border-teal-500/20 transition-all flex items-center gap-0.5 shadow-xs shrink-0"
           title="Search & Send Tenor GIFs"
         >
-          <Sparkles size={12} className="text-teal-500" />
+          <Sparkles size={11} className="text-teal-500" />
           <span>GIF</span>
         </button>
 
@@ -424,18 +428,18 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         <button
           type="button"
           onClick={isRecording ? stopRecording : startRecording}
-          className={`p-2 rounded-full transition-colors ${
+          className={`p-1.5 sm:p-2 rounded-full transition-colors shrink-0 ${
             isRecording
               ? 'bg-red-500 text-white animate-pulse'
               : 'hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 hover:text-emerald-600 dark:hover:text-emerald-400'
           }`}
           title="Record voice memo"
         >
-          <Mic size={20} />
+          <Mic size={19} />
         </button>
 
         {/* Main Text Input Field */}
-        <div className="flex-1 relative flex items-center bg-zinc-100 dark:bg-zinc-800 rounded-full px-3.5 py-1.5 focus-within:ring-2 focus-within:ring-emerald-500/50 transition-all">
+        <div className="flex-1 min-w-0 relative flex items-center bg-zinc-100 dark:bg-zinc-800 rounded-full px-2.5 sm:px-3 py-1 focus-within:ring-2 focus-within:ring-emerald-500/50 transition-all overflow-hidden">
           <input
             ref={inputRef}
             type="text"
@@ -448,63 +452,52 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               }
             }}
             placeholder={placeholder}
-            className="flex-1 bg-transparent text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none py-1"
+            className="flex-1 min-w-0 bg-transparent text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none py-0.5 truncate"
           />
 
           {/* Quick Auto-Translate / Pinyin helper toggle inside input */}
           <button
             type="button"
             onClick={() => setAutoTranslate(!autoTranslate)}
-            className={`p-1 rounded-md text-xs font-semibold flex items-center gap-1 transition-colors mr-1 ${
+            className={`p-1 rounded-md text-xs font-semibold flex items-center gap-0.5 transition-colors mr-0.5 shrink-0 ${
               autoTranslate
                 ? 'bg-emerald-600 text-white'
                 : 'text-zinc-400 hover:text-emerald-500'
             }`}
             title="Auto-translate message with Pinyin & Chinese"
           >
-            <Languages size={14} />
-            <span className="hidden sm:inline text-[10px]">Pinyin</span>
+            <Languages size={13} />
+            <span className="hidden md:inline text-[10px]">Pinyin</span>
           </button>
-
-          {/* Full Chinese ⇄ English Translator Studio */}
-          {onOpenTranslator && (
-            <button
-              type="button"
-              onClick={onOpenTranslator}
-              className="p-1 rounded-md text-xs font-semibold flex items-center gap-0.5 text-zinc-400 hover:text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors mr-1"
-              title="Open Chinese ⇄ English Translator"
-            >
-              <Sparkles size={13} className="text-emerald-500" />
-              <span className="hidden sm:inline text-[10px] font-bold">CN⇄EN</span>
-            </button>
-          )}
 
           {/* Emoji button inside input */}
           <button
             type="button"
             onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-            className="p-1 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-colors"
+            className="p-1 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-colors shrink-0"
           >
-            <Smile size={18} />
+            <Smile size={17} />
           </button>
         </div>
 
-        {/* Send Button or Thumbs Up Like */}
+        {/* Send Button or Thumbs Up Like - Always Pinned Right & Shrink-0 */}
         <button
           type="button"
           onClick={handleSend}
           disabled={isSending}
-          className={`p-2.5 rounded-full transition-all active:scale-90 ${
+          className={`p-2 sm:p-2.5 rounded-full transition-all active:scale-90 shrink-0 z-10 ${
             text.trim() || selectedFile
               ? 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white shadow-md'
               : 'text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 hover:scale-110'
           }`}
           title={text.trim() || selectedFile ? 'Send Message' : 'Send Like 👍'}
         >
-          {text.trim() || selectedFile ? (
+          {isSending ? (
+            <Loader2 size={18} className="animate-spin text-white" />
+          ) : text.trim() || selectedFile ? (
             <Send size={18} />
           ) : (
-            <ThumbsUp size={22} className="transition-transform active:rotate-[-12deg]" />
+            <ThumbsUp size={20} className="transition-transform active:rotate-[-12deg]" />
           )}
         </button>
       </div>

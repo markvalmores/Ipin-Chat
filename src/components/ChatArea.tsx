@@ -310,10 +310,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   return (
     <div className="flex-1 h-full flex flex-col bg-white dark:bg-zinc-950 overflow-hidden">
       {/* 1. Active Chat Header */}
-      <div className="p-3 px-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md z-10">
+      <div className="p-2 sm:p-3 px-2.5 sm:px-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md z-10 w-full max-w-full overflow-hidden">
         <div
           onClick={handleOpenHeaderProfile}
-          className={`flex items-center gap-3 min-w-0 ${otherUser ? 'cursor-pointer group' : ''}`}
+          className={`flex items-center gap-2 sm:gap-3 min-w-0 ${otherUser ? 'cursor-pointer group' : ''}`}
           title={otherUser ? `Click to view ${displayInfo.title}'s profile, banner & status` : displayInfo.title}
         >
           {/* Back button on mobile */}

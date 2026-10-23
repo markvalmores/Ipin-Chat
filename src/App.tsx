@@ -154,7 +154,7 @@ const MessengerInner: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-zinc-100 dark:bg-zinc-950 font-sans text-zinc-900 dark:text-zinc-100 selection:bg-emerald-500 selection:text-white">
+    <div className="flex flex-col h-screen w-full max-w-full overflow-x-hidden bg-zinc-100 dark:bg-zinc-950 font-sans text-zinc-900 dark:text-zinc-100 selection:bg-emerald-500 selection:text-white">
       {/* Top Cross-Border Bridge Protocol Indicator */}
       <GlobalBridgeBanner onOpenAuthModal={() => setIsAuthModalOpen(true)} />
 
