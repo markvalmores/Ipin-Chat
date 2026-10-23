@@ -10,7 +10,8 @@ import {
   VolumeX,
   Maximize,
   RotateCcw,
-  Check
+  Check,
+  Share2
 } from 'lucide-react';
 import { getMediaBlobUrl, downloadMediaFile } from '../utils/mediaStore';
 import { VideoPlayer } from './VideoPlayer';
@@ -24,6 +25,7 @@ interface MediaPreviewModalProps {
   fileFormat?: string;
   fileSize?: number;
   posterUrl?: string;
+  onForward?: () => void;
 }
 
 export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
@@ -34,7 +36,8 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
   fileName,
   fileFormat,
   fileSize,
-  posterUrl
+  posterUrl,
+  onForward
 }) => {
   const [resolvedUrl, setResolvedUrl] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
@@ -300,6 +303,22 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
               </span>
             </button>
           )}
+
+          {onForward && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onForward();
+              }}
+              className="px-3 py-1.5 sm:py-2 rounded-full bg-teal-600/90 hover:bg-teal-500 text-white transition-all flex items-center gap-1.5 text-xs font-semibold cursor-pointer shadow-md active:scale-95"
+              title="Forward video or photo to another user or channel"
+            >
+              <Share2 size={16} />
+              <span>Forward</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={onClose}

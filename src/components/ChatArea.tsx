@@ -46,9 +46,11 @@ import { ChannelMembersDrawer } from './ChannelMembersDrawer';
 import { AddGroupMembersModal } from './AddGroupMembersModal';
 import { ChatWallpaperView } from './ChatWallpaperView';
 import { ChatWallpaperModal } from './ChatWallpaperModal';
+import { ForwardModal } from './ForwardModal';
 
 interface ChatAreaProps {
   conversation: Conversation | null;
+  conversations?: Conversation[];
   onBackToSidebar?: () => void;
   onSelectUserChat?: (user: UserProfile) => void;
   onLeaveGroup?: (conversationId: string) => void;
@@ -57,6 +59,7 @@ interface ChatAreaProps {
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
   conversation,
+  conversations = [],
   onBackToSidebar,
   onSelectUserChat,
   onLeaveGroup,
@@ -92,6 +95,45 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([]);
   const [isDeletingBatch, setIsDeletingBatch] = useState(false);
   const [showBatchDeleteConfirm, setShowBatchDeleteConfirm] = useState(false);
+
+  // Forwarding State
+  const [messageToForward, setMessageToForward] = useState<Message | null>(null);
+  const [isForwardModalOpen, setIsForwardModalOpen] = useState(false);
+
+  const handleOpenForward = (msg: Message) => {
+    setMessageToForward(msg);
+    setIsForwardModalOpen(true);
+  };
+
+  const handleForwardFromMediaPreview = () => {
+    if (!selectedMedia) return;
+    const matchingMsg = messages.find(
+      (m) => m.mediaUrl === selectedMedia.url || m.posterUrl === selectedMedia.posterUrl
+    );
+
+    if (matchingMsg) {
+      setMessageToForward(matchingMsg);
+    } else {
+      setMessageToForward({
+        id: `fwd-${Date.now()}`,
+        conversationId: conversation?.id || '',
+        senderId: profile?.uid || '',
+        senderName: profile?.displayName || 'User',
+        senderPhoto: profile?.photoURL || '',
+        text: '',
+        mediaUrl: selectedMedia.url,
+        posterUrl: selectedMedia.posterUrl,
+        mediaType: (selectedMedia.type as Message['mediaType']) || 'video',
+        fileName: selectedMedia.name,
+        fileSize: selectedMedia.size,
+        fileFormat: selectedMedia.format,
+        reactions: {},
+        readBy: [],
+        createdAt: new Date().toISOString()
+      });
+    }
+    setIsForwardModalOpen(true);
+  };
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -581,6 +623,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               onSelectUserChat={onSelectUserChat}
               onOpenUserProfile={handleOpenUserProfileFromId}
               onDeleteMessage={handleDeleteSingleMessage}
+              onForwardMessage={handleOpenForward}
               isSelectMode={isSelectMode}
               isSelected={selectedMessageIds.includes(msg.id)}
               onToggleSelect={handleToggleSelectMessage}
@@ -693,8 +736,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           fileFormat={selectedMedia.format}
           fileSize={selectedMedia.size}
           posterUrl={selectedMedia.posterUrl}
+          onForward={handleForwardFromMediaPreview}
         />
       )}
+
+      {/* Forward Message / Media Modal */}
+      <ForwardModal
+        isOpen={isForwardModalOpen}
+        onClose={() => setIsForwardModalOpen(false)}
+        messageToForward={messageToForward}
+        conversations={conversations}
+        allUsers={allUsers}
+      />
 
       {/* 5. User Profile & Banner Inspection Modal */}
       <UserProfileModal

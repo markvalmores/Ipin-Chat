@@ -194,6 +194,7 @@ const MessengerInner: React.FC = () => {
         >
           <ChatArea
             conversation={activeConversation}
+            conversations={conversations}
             onBackToSidebar={() => setIsMobileChatOpen(false)}
             onSelectUserChat={handleStartDirectChat}
             onOpenAuthModal={() => setIsAuthModalOpen(true)}

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Smile, Check, CheckCheck, Languages, Download, Play, FileText, Film, Volume2, Sparkles, Pencil, X, Trash2, CheckSquare, Maximize, Zap } from 'lucide-react';
+import { Smile, Check, CheckCheck, Languages, Download, Play, FileText, Film, Volume2, Sparkles, Pencil, X, Trash2, CheckSquare, Maximize, Zap, Share2 } from 'lucide-react';
 import { Message, UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { toggleMessageReaction, editMessage } from '../services/chatService';
@@ -18,6 +18,7 @@ interface MessageItemProps {
   onSelectUserChat?: (user: UserProfile) => void;
   onOpenUserProfile?: (userId: string, userName?: string) => void;
   onDeleteMessage?: (messageId: string) => void;
+  onForwardMessage?: (message: Message) => void;
   isSelectMode?: boolean;
   isSelected?: boolean;
   onToggleSelect?: (messageId: string) => void;
@@ -35,6 +36,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   onSelectUserChat,
   onOpenUserProfile,
   onDeleteMessage,
+  onForwardMessage,
   isSelectMode,
   isSelected,
   onToggleSelect,
@@ -621,6 +623,19 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               <span className="text-[10px] font-medium">React</span>
             </button>
 
+            {/* Direct "Forward" button */}
+            {onForwardMessage && (
+              <button
+                type="button"
+                onClick={() => onForwardMessage(message)}
+                className="px-2 py-0.5 rounded-full text-xs flex items-center gap-1 bg-white/80 dark:bg-zinc-800/80 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 border border-zinc-200 dark:border-zinc-700 hover:border-emerald-400 text-zinc-600 dark:text-zinc-400 hover:text-emerald-600 dark:hover:text-emerald-300 transition-all shadow-xs cursor-pointer"
+                title="Forward message, photo, or video to another user or channel"
+              >
+                <Share2 size={11} className="text-teal-500" />
+                <span className="text-[10px] font-medium">Forward</span>
+              </button>
+            )}
+
             {/* Direct "Edit sentence" button for sender's own text messages */}
             {isSelf && message.text && !isEditing && (
               <button
@@ -629,7 +644,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                   setIsEditing(true);
                   setEditText(message.text || '');
                 }}
-                className="px-2 py-0.5 rounded-full text-xs flex items-center gap-1 bg-white/80 dark:bg-zinc-800/80 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 border border-zinc-200 dark:border-zinc-700 hover:border-emerald-400 text-zinc-600 dark:text-zinc-400 hover:text-emerald-600 dark:hover:text-emerald-300 transition-all shadow-xs"
+                className="px-2 py-0.5 rounded-full text-xs flex items-center gap-1 bg-white/80 dark:bg-zinc-800/80 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 border border-zinc-200 dark:border-zinc-700 hover:border-emerald-400 text-zinc-600 dark:text-zinc-400 hover:text-emerald-600 dark:hover:text-emerald-300 transition-all shadow-xs cursor-pointer"
                 title="Edit and fix broken sentence"
               >
                 <Pencil size={11} className="text-emerald-500" />
@@ -639,16 +654,28 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           </div>
         </div>
 
-        {/* Message Quick Action Row (React, Edit, Translate) */}
+        {/* Message Quick Action Row (React, Forward, Edit, Translate) */}
         <div className="opacity-80 hover:opacity-100 transition-opacity flex items-center gap-1 mb-1">
           <button
             type="button"
             onClick={() => setShowReactionBar(!showReactionBar)}
-            className="p-1.5 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500 hover:text-amber-500 transition-colors"
+            className="p-1.5 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500 hover:text-amber-500 transition-colors cursor-pointer"
             title="React with emoji or GIF"
           >
             <Smile size={14} />
           </button>
+
+          {/* Forward Button */}
+          {onForwardMessage && (
+            <button
+              type="button"
+              onClick={() => onForwardMessage(message)}
+              className="p-1.5 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-500 hover:text-teal-500 transition-colors cursor-pointer"
+              title="Forward message, video, or photo to other users"
+            >
+              <Share2 size={14} />
+            </button>
+          )}
 
           {isSelf && message.text && (
             <button
