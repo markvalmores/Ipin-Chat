@@ -11,6 +11,7 @@ export interface EncoderOptions {
   fps?: number; // Target frame rate (e.g. 30)
   videoBitrate?: number; // Target video bitrate in bps (default: 1.5 Mbps)
   audioBitrate?: number; // Target audio bitrate in bps (default: 128 kbps)
+  forceTranscode?: boolean; // Force canvas transcode
   onProgress?: (percent: number, phase: string) => void;
 }
 
@@ -216,14 +217,14 @@ export async function encodeVideoBlob(
   targetWidth = Math.floor(targetWidth / 2) * 2;
   targetHeight = Math.floor(targetHeight / 2) * 2;
 
-  // Fast-path check: If blob is already standard web video (< 10MB MP4/WebM) and browser can play it natively,
-  // we do a fast header wrap & poster injection to ensure zero latency while wrapping in EncodedVideoResult!
+  // Fast-path check: If blob is already standard web video and browser can play it natively,
+  // we do a fast header wrap & poster injection to ensure zero latency, pristine audio, and cross-device playback!
   const isStandardFormat =
     sourceBlob.type.includes('mp4') ||
     sourceBlob.type.includes('webm') ||
     sourceBlob.type.includes('quicktime');
 
-  if (isStandardFormat && sourceBlob.size < 12 * 1024 * 1024 && typeof MediaRecorder === 'undefined') {
+  if (isStandardFormat && !options.forceTranscode) {
     onProgress?.(100, 'Video Optimization Complete!');
     URL.revokeObjectURL(sourceUrl);
     const resultUrl = URL.createObjectURL(sourceBlob);
@@ -231,14 +232,14 @@ export async function encodeVideoBlob(
       blob: sourceBlob,
       url: resultUrl,
       posterUrl,
-      format: sourceBlob.type.includes('mp4') ? 'mp4' : 'webm',
+      format: sourceBlob.type.includes('webm') ? 'webm' : 'mp4',
       mimeType: sourceBlob.type || 'video/mp4',
-      codec: 'Standard Web Codec',
+      codec: sourceBlob.type.includes('webm') ? 'WebM (VP8/VP9)' : 'H.264 / AAC',
       width: targetWidth,
       height: targetHeight,
       duration,
       size: sourceBlob.size,
-      bitrate: Math.round((sourceBlob.size * 8) / duration),
+      bitrate: Math.round((sourceBlob.size * 8) / (duration || 1)),
       resolutionLabel: getResolutionLabel(targetHeight),
       isEncoded: true,
       encodedAt: new Date().toISOString()

@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { translateText, translateTextAsync } from '../utils/translator';
-import { compressImageForUpload, captureVideoPoster, storeMediaBlob } from '../utils/mediaStore';
+import { compressImageForUpload, captureVideoPoster, storeMediaBlob, storeSharedMediaToCloud } from '../utils/mediaStore';
 import { encodeVideoBlob } from '../utils/videoEncoder';
 import { GifPickerModal } from './GifPickerModal';
 import { TenorGif } from '../services/tenorService';
@@ -234,26 +234,18 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           const encoded = await encodeVideoBlob(selectedFile.file, {
             targetFormat: 'auto',
             maxDimension: 1280,
-            videoBitrate: 1800000
+            videoBitrate: 1200000
           });
 
           posterUrl = encoded.posterUrl || (await captureVideoPoster(selectedFile.file)) || undefined;
           const mediaKey = `vid_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
 
-          // Store encoded video blob into IndexedDB and broadcast across all active tabs
-          await storeMediaBlob(mediaKey, encoded.blob);
-
-          if (encoded.blob.size < 600 * 1024) {
-            // Embed dataUrl directly for instant small video playback
-            finalMediaUrl = await new Promise<string>((res) => {
-              const reader = new FileReader();
-              reader.onload = () => res(reader.result as string);
-              reader.readAsDataURL(encoded.blob);
-            });
-          } else {
-            // Larger video: reference cross-tab synchronized blob key
-            finalMediaUrl = `local_media:${mediaKey}`;
-          }
+          // Store encoded video into cloud chunks + local IndexedDB so both users can play & download!
+          finalMediaUrl = await storeSharedMediaToCloud(mediaKey, encoded.blob, {
+            fileName: selectedFile.name,
+            fileFormat: selectedFile.format || encoded.format,
+            fileSize: encoded.blob.size
+          });
         } else {
           // Audio or file
           finalMediaUrl = await new Promise<string>((res) => {

@@ -56,5 +56,18 @@ service cloud.firestore {
       allow update: if true;
       allow delete: if isSignedIn() || resource.data.userId.matches('^demo_user_.*');
     }
+
+    // 5. Shared media chunks collection for cross-user/cross-device video & file playback
+    match /shared_media/{mediaId} {
+      allow read: if true;
+      allow create, update: if true;
+      allow delete: if isSignedIn();
+
+      match /chunks/{chunkIndex} {
+        allow read: if true;
+        allow create, update: if true;
+        allow delete: if isSignedIn();
+      }
+    }
   }
 }

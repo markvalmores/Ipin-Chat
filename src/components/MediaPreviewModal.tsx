@@ -109,8 +109,8 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
 
     const target = mediaUrl || '';
 
-    if (target.startsWith('local_media:') || target.startsWith('vid_')) {
-      const key = target.replace('local_media:', '');
+    if (target.startsWith('local_media:') || target.startsWith('shared_media:') || target.startsWith('vid_')) {
+      const key = target.replace(/^shared_media:/, '').replace(/^local_media:/, '');
       setIsLoading(true);
       setResolvedUrl(''); // Do not set raw key as video src to avoid HTML5 video crash
 
@@ -243,6 +243,7 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
     resolvedUrl &&
     !resolvedUrl.startsWith('data:image/') &&
     !resolvedUrl.startsWith('local_media:') &&
+    !resolvedUrl.startsWith('shared_media:') &&
     !resolvedUrl.startsWith('vid_')
       ? resolvedUrl
       : undefined;

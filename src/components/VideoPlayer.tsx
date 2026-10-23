@@ -317,7 +317,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const result = await encodeVideoBlob(sourceBlob, {
         targetFormat: 'auto',
         maxDimension: 1280,
-        videoBitrate: 1800000,
+        videoBitrate: 1200000,
+        forceTranscode: true,
         onProgress: (percent, phase) => {
           setEncodingProgress(percent);
           setEncodingPhase(phase);
@@ -396,6 +397,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           src={activeSrc}
           poster={activePoster}
           playsInline
+          {...({
+            'webkit-playsinline': 'true',
+            'x5-playsinline': 'true',
+            'x5-video-player-type': 'h5'
+          } as any)}
+          preload="metadata"
+          crossOrigin="anonymous"
           loop={isLooping}
           autoPlay={autoPlay}
           onTimeUpdate={handleTimeUpdate}

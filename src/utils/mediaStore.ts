@@ -1,7 +1,10 @@
 /**
- * Media compression, IndexedDB caching, Cross-tab BroadcastChannel sync, and video poster generator
- * Ensures videos and photos of ANY size can be sent and played reliably across tabs, sender and viewer!
+ * Media compression, IndexedDB caching, Cross-tab BroadcastChannel sync, Firestore cloud chunk sync, and video poster generator
+ * Ensures videos and photos of ANY size can be sent, played, and downloaded reliably across all browsers, sender and receiver!
  */
+
+import { doc, setDoc, getDoc, collection, getDocs, query, orderBy } from 'firebase/firestore';
+import { db } from '../firebase';
 
 const DB_NAME = 'ipin_media_cache';
 const STORE_NAME = 'media_blobs';
@@ -17,9 +20,9 @@ function openDB(): Promise<IDBDatabase> {
   dbPromise = new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME);
+      const dbInstance = request.result;
+      if (!dbInstance.objectStoreNames.contains(STORE_NAME)) {
+        dbInstance.createObjectStore(STORE_NAME);
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -94,19 +97,35 @@ try {
 }
 
 /**
+ * Converts a Blob to a Base64 data URL
+ */
+export async function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
  * Save a media blob (video/audio/file) to IndexedDB and broadcast across open tabs
  */
 export async function storeMediaBlob(key: string, blob: Blob): Promise<string> {
-  const cleanKey = String(key).replace(/^local_media:/, '');
+  const cleanKey = String(key)
+    .replace(/^shared_media:/, '')
+    .replace(/^local_media:/, '');
   try {
     const objectUrl = URL.createObjectURL(blob);
     objectUrlCache.set(cleanKey, objectUrl);
     objectUrlCache.set(`local_media:${cleanKey}`, objectUrl);
+    objectUrlCache.set(`shared_media:${cleanKey}`, objectUrl);
     blobCache.set(cleanKey, blob);
     blobCache.set(`local_media:${cleanKey}`, blob);
+    blobCache.set(`shared_media:${cleanKey}`, blob);
 
-    const db = await openDB();
-    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const dbInst = await openDB();
+    const tx = dbInst.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
     store.put(blob, cleanKey);
 
@@ -115,7 +134,7 @@ export async function storeMediaBlob(key: string, blob: Blob): Promise<string> {
       tx.onerror = () => reject(tx.error);
     });
 
-    // Broadcast to other open tabs (e.g. viewer tab in same browser)
+    // Broadcast to other open tabs in the same browser
     if (mediaChannel) {
       try {
         mediaChannel.postMessage({
@@ -128,7 +147,9 @@ export async function storeMediaBlob(key: string, blob: Blob): Promise<string> {
       }
     }
 
-    window.dispatchEvent(new CustomEvent('ipin_media_blob_ready', { detail: { key: cleanKey, url: objectUrl, blob } }));
+    window.dispatchEvent(
+      new CustomEvent('ipin_media_blob_ready', { detail: { key: cleanKey, url: objectUrl, blob } })
+    );
     return objectUrl;
   } catch (err) {
     console.warn('IndexedDB store failed:', err);
@@ -140,11 +161,74 @@ export async function storeMediaBlob(key: string, blob: Blob): Promise<string> {
 }
 
 /**
+ * Saves a media blob to Firestore cloud chunks and local IndexedDB, returning
+ * an embedded Data URL (for fast small videos <= 700KB) or 'shared_media:{key}'
+ * so both users on any device or browser can instantly play and download it!
+ */
+export async function storeSharedMediaToCloud(
+  key: string,
+  blob: Blob,
+  options?: { fileName?: string; fileFormat?: string; fileSize?: number }
+): Promise<string> {
+  const cleanKey = String(key)
+    .replace(/^shared_media:/, '')
+    .replace(/^local_media:/, '');
+
+  // 1. Cache locally first for instant sender playback
+  await storeMediaBlob(cleanKey, blob);
+
+  // 2. If small enough (<= 700 KB), return embedded data URL for instant 0-roundtrip sync!
+  if (blob.size <= 700 * 1024) {
+    const dataUrl = await blobToBase64(blob);
+    return dataUrl;
+  }
+
+  // 3. For larger video, upload chunks to Firestore shared_media collection
+  try {
+    const fullDataUrl = await blobToBase64(blob);
+    const b64Data = fullDataUrl.includes(',') ? fullDataUrl.split(',')[1] : fullDataUrl;
+    const CHUNK_SIZE = 350000; // ~260 KB per chunk
+    const totalChunks = Math.ceil(b64Data.length / CHUNK_SIZE);
+
+    // Parent metadata doc
+    await setDoc(doc(db, 'shared_media', cleanKey), {
+      id: cleanKey,
+      mimeType: blob.type || (options?.fileFormat ? `video/${options.fileFormat}` : 'video/mp4'),
+      fileName: options?.fileName || 'Video_Message.mp4',
+      fileSize: blob.size,
+      totalChunks,
+      createdAt: new Date().toISOString()
+    });
+
+    // Upload chunks in parallel
+    const chunkPromises: Promise<any>[] = [];
+    for (let i = 0; i < totalChunks; i++) {
+      const chunkPart = b64Data.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+      chunkPromises.push(
+        setDoc(doc(db, 'shared_media', cleanKey, 'chunks', String(i)), {
+          index: i,
+          data: chunkPart
+        })
+      );
+    }
+    await Promise.all(chunkPromises);
+
+    return `shared_media:${cleanKey}`;
+  } catch (err) {
+    console.warn('Failed to upload shared media chunks to Firestore:', err);
+    return `local_media:${cleanKey}`;
+  }
+}
+
+/**
  * Retrieve the original uncompressed binary Blob for an exact file download
+ * Checks memory -> IndexedDB -> Firestore shared_media cloud -> BroadcastChannel
  */
 export async function getMediaBlob(key: string): Promise<Blob | null> {
   if (!key) return null;
-  const cleanKey = String(key).replace(/^local_media:/, '');
+  const cleanKey = String(key)
+    .replace(/^shared_media:/, '')
+    .replace(/^local_media:/, '');
 
   if (blobCache.has(cleanKey)) {
     return blobCache.get(cleanKey)!;
@@ -152,10 +236,14 @@ export async function getMediaBlob(key: string): Promise<Blob | null> {
   if (blobCache.has(`local_media:${cleanKey}`)) {
     return blobCache.get(`local_media:${cleanKey}`)!;
   }
+  if (blobCache.has(`shared_media:${cleanKey}`)) {
+    return blobCache.get(`shared_media:${cleanKey}`)!;
+  }
 
+  // 1. Check local IndexedDB
   try {
-    const db = await openDB();
-    const tx = db.transaction(STORE_NAME, 'readonly');
+    const dbInst = await openDB();
+    const tx = dbInst.transaction(STORE_NAME, 'readonly');
     const store = tx.objectStore(STORE_NAME);
     const request = store.get(cleanKey);
 
@@ -168,16 +256,58 @@ export async function getMediaBlob(key: string): Promise<Blob | null> {
       blobCache.set(cleanKey, blob);
       return blob;
     }
+  } catch (e) {
+    // Continue to cloud
+  }
 
-    // Request from sender tab
-    if (mediaChannel) {
+  // 2. Fetch from Firestore shared_media cloud storage
+  try {
+    const mediaDocRef = doc(db, 'shared_media', cleanKey);
+    const mediaDocSnap = await getDoc(mediaDocRef);
+    if (mediaDocSnap.exists()) {
+      const meta = mediaDocSnap.data();
+      const chunksSnap = await getDocs(
+        query(collection(db, 'shared_media', cleanKey, 'chunks'), orderBy('index', 'asc'))
+      );
+      if (!chunksSnap.empty) {
+        const sortedChunks = chunksSnap.docs
+          .map((d) => d.data())
+          .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+        const combinedB64 = sortedChunks.map((c) => c.data || '').join('');
+        const mimeType = meta.mimeType || 'video/mp4';
+        const binaryStr = atob(combinedB64);
+        const len = binaryStr.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          bytes[i] = binaryStr.charCodeAt(i);
+        }
+        const cloudBlob = new Blob([bytes], { type: mimeType });
+
+        // Cache in local IndexedDB so subsequent views are instant!
+        await storeMediaBlob(cleanKey, cloudBlob);
+        return cloudBlob;
+      }
+    }
+  } catch (err) {
+    console.warn('Firestore shared media fetch error:', err);
+  }
+
+  // 3. Request from sender tab via BroadcastChannel fallback
+  if (mediaChannel) {
+    try {
       mediaChannel.postMessage({ type: 'REQUEST_MEDIA', key: cleanKey });
 
       const waitedBlob = await new Promise<Blob | null>((resolve) => {
         let timer: number | null = null;
         const handler = (e: Event) => {
           const detail = (e as CustomEvent).detail;
-          if (detail && (detail.key === cleanKey || detail.key === `local_media:${cleanKey}`) && detail.blob) {
+          if (
+            detail &&
+            (detail.key === cleanKey ||
+              detail.key === `local_media:${cleanKey}` ||
+              detail.key === `shared_media:${cleanKey}`) &&
+            detail.blob
+          ) {
             window.removeEventListener('ipin_media_blob_ready', handler);
             if (timer) clearTimeout(timer);
             resolve(detail.blob);
@@ -195,85 +325,59 @@ export async function getMediaBlob(key: string): Promise<Blob | null> {
         blobCache.set(cleanKey, waitedBlob);
         return waitedBlob;
       }
-    }
-
-    return null;
-  } catch (err) {
-    return null;
+    } catch (e) {}
   }
+
+  return null;
 }
 
 /**
  * Retrieve a media blob and return a playable object URL (blob:http...)
+ * Works across local cache, IndexedDB, Firestore cloud chunks, and cross-tab sync!
  */
 export async function getMediaBlobUrl(key: string): Promise<string | null> {
   if (!key) return null;
-  const cleanKey = String(key).replace(/^local_media:/, '');
 
-  // 1. Instant synchronous memory check
+  // Direct URLs return immediately
+  if (
+    key.startsWith('http://') ||
+    key.startsWith('https://') ||
+    key.startsWith('data:') ||
+    key.startsWith('blob:') ||
+    key.startsWith('/') ||
+    key.startsWith('./')
+  ) {
+    return key;
+  }
+
+  const cleanKey = String(key)
+    .replace(/^shared_media:/, '')
+    .replace(/^local_media:/, '');
+
+  // Instant synchronous memory check
   if (objectUrlCache.has(cleanKey)) {
     return objectUrlCache.get(cleanKey)!;
+  }
+  if (objectUrlCache.has(`shared_media:${cleanKey}`)) {
+    return objectUrlCache.get(`shared_media:${cleanKey}`)!;
   }
   if (objectUrlCache.has(`local_media:${cleanKey}`)) {
     return objectUrlCache.get(`local_media:${cleanKey}`)!;
   }
 
-  // 2. Local IndexedDB lookup
-  try {
-    const db = await openDB();
-    const tx = db.transaction(STORE_NAME, 'readonly');
-    const store = tx.objectStore(STORE_NAME);
-    const request = store.get(cleanKey);
-
-    const blob = await new Promise<Blob | null>((resolve) => {
-      request.onsuccess = () => resolve(request.result || null);
-      request.onerror = () => resolve(null);
-    });
-
-    if (blob) {
-      blobCache.set(cleanKey, blob);
-      const url = URL.createObjectURL(blob);
-      objectUrlCache.set(cleanKey, url);
-      objectUrlCache.set(`local_media:${cleanKey}`, url);
-      return url;
-    }
-
-    // 3. If not found locally, request from sender tab via BroadcastChannel
-    if (mediaChannel) {
-      mediaChannel.postMessage({ type: 'REQUEST_MEDIA', key: cleanKey });
-
-      // Wait up to 1.5s for response
-      const waitedUrl = await new Promise<string | null>((resolve) => {
-        let timer: number | null = null;
-
-        const handler = (e: Event) => {
-          const detail = (e as CustomEvent).detail;
-          if (detail && (detail.key === cleanKey || detail.key === `local_media:${cleanKey}`)) {
-            window.removeEventListener('ipin_media_blob_ready', handler);
-            if (timer) clearTimeout(timer);
-            resolve(detail.url || objectUrlCache.get(cleanKey) || null);
-          }
-        };
-
-        window.addEventListener('ipin_media_blob_ready', handler);
-        timer = window.setTimeout(() => {
-          window.removeEventListener('ipin_media_blob_ready', handler);
-          resolve(objectUrlCache.get(cleanKey) || null);
-        }, 1200);
-      });
-
-      if (waitedUrl) {
-        return waitedUrl;
-      }
-      if (objectUrlCache.has(cleanKey)) {
-        return objectUrlCache.get(cleanKey)!;
-      }
-    }
-
-    return null;
-  } catch (err) {
-    return null;
+  const blob = await getMediaBlob(cleanKey);
+  if (blob) {
+    const url = URL.createObjectURL(blob);
+    objectUrlCache.set(cleanKey, url);
+    objectUrlCache.set(`local_media:${cleanKey}`, url);
+    objectUrlCache.set(`shared_media:${cleanKey}`, url);
+    window.dispatchEvent(
+      new CustomEvent('ipin_media_blob_ready', { detail: { key: cleanKey, url, blob } })
+    );
+    return url;
   }
+
+  return null;
 }
 
 export interface DownloadMediaOptions {
@@ -296,11 +400,11 @@ export async function downloadMediaFile(options: DownloadMediaOptions): Promise<
   let blob: Blob | null = null;
   const target = String(urlOrKey || mediaUrl || rawKey || '').trim();
 
-  // Candidate keys for blobCache and IndexedDB lookup
+  // Candidate keys for blobCache, IndexedDB, and Firestore shared_media lookup
   const candidateKeys: string[] = [];
-  if (rawKey) candidateKeys.push(rawKey.replace(/^local_media:/, ''));
-  if (mediaUrl) candidateKeys.push(mediaUrl.replace(/^local_media:/, ''));
-  if (target) candidateKeys.push(target.replace(/^local_media:/, ''));
+  if (rawKey) candidateKeys.push(rawKey.replace(/^shared_media:/, '').replace(/^local_media:/, ''));
+  if (mediaUrl) candidateKeys.push(mediaUrl.replace(/^shared_media:/, '').replace(/^local_media:/, ''));
+  if (target) candidateKeys.push(target.replace(/^shared_media:/, '').replace(/^local_media:/, ''));
 
   try {
     // 1. Check blobCache and IndexedDB for exact original Blob

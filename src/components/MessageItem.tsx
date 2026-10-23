@@ -66,8 +66,27 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     let active = true;
     const mediaUrl = message.mediaUrl || '';
 
-    if (mediaUrl.startsWith('vid_') || mediaUrl.startsWith('local_media:')) {
-      const key = mediaUrl.replace('local_media:', '');
+    if (
+      mediaUrl.startsWith('http://') ||
+      mediaUrl.startsWith('https://') ||
+      mediaUrl.startsWith('data:') ||
+      mediaUrl.startsWith('blob:') ||
+      mediaUrl.startsWith('/') ||
+      mediaUrl.startsWith('./')
+    ) {
+      setResolvedBlobUrl(mediaUrl);
+      return;
+    }
+
+    if (
+      mediaUrl.startsWith('vid_') ||
+      mediaUrl.startsWith('local_media:') ||
+      mediaUrl.startsWith('shared_media:')
+    ) {
+      const key = mediaUrl
+        .replace(/^shared_media:/, '')
+        .replace(/^local_media:/, '');
+
       getMediaBlobUrl(key).then((url) => {
         if (active && url) {
           setResolvedBlobUrl(url);
@@ -76,12 +95,15 @@ export const MessageItem: React.FC<MessageItemProps> = ({
 
       const handleBlobReady = (e: Event) => {
         const detail = (e as CustomEvent).detail;
-        if (detail && detail.key === key) {
-          getMediaBlobUrl(key).then((url) => {
-            if (active && url) {
-              setResolvedBlobUrl(url);
-            }
-          });
+        if (
+          detail &&
+          (detail.key === key ||
+            detail.key === `shared_media:${key}` ||
+            detail.key === `local_media:${key}`)
+        ) {
+          if (active && detail.url) {
+            setResolvedBlobUrl(detail.url);
+          }
         }
       };
 
@@ -90,12 +112,9 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         active = false;
         window.removeEventListener('ipin_media_blob_ready', handleBlobReady);
       };
-    } else if (mediaUrl.startsWith('blob:') || mediaUrl.startsWith('http') || mediaUrl.startsWith('data:video/')) {
-      setResolvedBlobUrl(mediaUrl);
-    } else {
-      setResolvedBlobUrl(null);
     }
 
+    setResolvedBlobUrl(null);
     return () => {
       active = false;
     };
@@ -365,7 +384,14 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               <div className="rounded-2xl overflow-hidden max-w-sm bg-black relative my-1">
                 {(() => {
                   const poster = message.posterUrl || (message.mediaUrl?.startsWith('data:image/') ? message.mediaUrl : undefined);
-                  const validSrc = resolvedBlobUrl || (message.mediaUrl && !message.mediaUrl.startsWith('data:image/') && !message.mediaUrl.startsWith('local_media:') ? message.mediaUrl : null);
+                  const validSrc = resolvedBlobUrl || (
+                    message.mediaUrl &&
+                    !message.mediaUrl.startsWith('data:image/') &&
+                    !message.mediaUrl.startsWith('local_media:') &&
+                    !message.mediaUrl.startsWith('shared_media:')
+                      ? message.mediaUrl
+                      : null
+                  );
 
                   if (validSrc) {
                     return (
@@ -379,7 +405,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                         onDownload={() => downloadMediaFile({
                           urlOrKey: validSrc || message.mediaUrl || '',
                           mediaUrl: message.mediaUrl,
-                          rawKey: message.mediaUrl?.replace(/^local_media:/, ''),
+                          rawKey: message.mediaUrl?.replace(/^shared_media:/, '').replace(/^local_media:/, ''),
                           fileName: message.fileName,
                           fileFormat: message.fileFormat,
                           fileSize: message.fileSize
@@ -388,14 +414,14 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                     );
                   }
 
-                  // If resolving blob key from local store
+                  // If resolving blob key from cloud or local store
                   return (
                     <div
                       className="relative cursor-pointer group/vid rounded-2xl overflow-hidden bg-zinc-900 border border-zinc-800 p-2"
                       onClick={async () => {
                         let finalSrc = validSrc;
                         if (!finalSrc && message.mediaUrl) {
-                          const key = message.mediaUrl.replace('local_media:', '');
+                          const key = message.mediaUrl.replace(/^shared_media:/, '').replace(/^local_media:/, '');
                           const url = await getMediaBlobUrl(key);
                           if (url) {
                             setResolvedBlobUrl(url);
