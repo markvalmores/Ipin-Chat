@@ -35,6 +35,7 @@ export async function sendMessage(
     fileFormat?: string;
   }
 ): Promise<string> {
+  const convRef = doc(db, 'conversations', conversationId);
   const messageId = `msg-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   const messageData: Message = {
     id: messageId,
@@ -77,34 +78,43 @@ export async function sendMessage(
   } catch (e) {}
   window.dispatchEvent(new CustomEvent('ipin_new_message', { detail: { conversationId, message: messageData } }));
 
-  try {
-    // 3. Ensure parent conversation document is present in Firestore
-    const convRef = doc(db, 'conversations', conversationId);
-    const lastPreview = data.mediaType && data.mediaType !== 'none'
-      ? `[${data.fileFormat?.toUpperCase() || data.mediaType.toUpperCase()}] ${data.text || data.fileName || 'Media Attachment'}`
-      : (data.text || 'Message');
+  // 3. Fire Firestore network write in background so sendMessage resolves in 0 ms
+  (async () => {
+    try {
+      const lastPreview = data.mediaType && data.mediaType !== 'none'
+        ? `[${data.fileFormat?.toUpperCase() || data.mediaType.toUpperCase()}] ${data.text || data.fileName || 'Media Attachment'}`
+        : (data.text || 'Message');
 
-    const defaultChannel = INITIAL_PUBLIC_CHANNELS.find(c => c.id === conversationId);
+      const defaultChannel = INITIAL_PUBLIC_CHANNELS.find(c => c.id === conversationId);
 
-    const updateData: Record<string, any> = {
-      id: conversationId,
-      lastMessageText: lastPreview,
-      lastMessageSender: sender.displayName,
-      lastMessageTime: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
+      const updateData: Record<string, any> = {
+        id: conversationId,
+        lastMessageText: lastPreview,
+        lastMessageSender: sender.displayName,
+        lastMessageTime: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
 
-    if (defaultChannel) {
-      updateData.type = defaultChannel.type;
-      updateData.title = defaultChannel.title;
-      updateData.avatar = defaultChannel.avatar;
+      if (defaultChannel) {
+        updateData.type = defaultChannel.type;
+        updateData.title = defaultChannel.title;
+        updateData.avatar = defaultChannel.avatar;
+      }
+
+      await Promise.race([
+        setDoc(convRef, updateData, { merge: true }),
+        new Promise((_, r) => setTimeout(() => r(new Error('sync timeout')), 6000))
+      ]);
+
+      const msgRef = doc(db, 'conversations', conversationId, 'messages', messageId);
+      await Promise.race([
+        setDoc(msgRef, messageData),
+        new Promise((_, r) => setTimeout(() => r(new Error('sync timeout')), 6000))
+      ]);
+    } catch (err) {
+      console.warn('Firestore message sync notice:', err);
     }
-
-    await setDoc(convRef, updateData, { merge: true });
-
-    // 4. Save message to subcollection in Firestore
-    const msgRef = doc(db, 'conversations', conversationId, 'messages', messageId);
-    await setDoc(msgRef, messageData);
+  })();
 
     // 5. Trigger Xiao Ai Human-like AI reply if chatting with Xiao Ai or mentioned
     const isDirectWithAi = conversationId === 'dm_xiaoai_ai' || conversationId.includes('xiaoai');
@@ -160,10 +170,6 @@ export async function sendMessage(
     }
 
     return messageId;
-  } catch (error) {
-    console.warn("Firestore write notice (local & cross-tab sync active):", error);
-    return messageId;
-  }
 }
 
 // Edit message text (fixes broken sentence)

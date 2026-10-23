@@ -190,8 +190,16 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     if (isSending) return;
     setIsSending(true);
 
+    const textToSend = text.trim();
+    const fileToSend = selectedFile;
+
+    // Clear input fields immediately for instant responsive feel
+    setText('');
+    setSelectedFile(null);
+    setShowEmojiPicker(false);
+
     try {
-      if (!text.trim() && !selectedFile) {
+      if (!textToSend && !fileToSend) {
         // Messenger / WeChat thumbs up Like
         await onSendMessage({
           text: '👍',
@@ -200,7 +208,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         return;
       }
 
-      let finalMessageText = text.trim();
+      let finalMessageText = textToSend;
 
       // Auto-translate if turned on
       if (autoTranslate && finalMessageText) {
@@ -221,22 +229,22 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         }
       }
 
-      if (selectedFile) {
+      if (fileToSend) {
         let finalMediaUrl = '';
         let posterUrl: string | undefined = undefined;
 
-        if (selectedFile.type === 'image') {
+        if (fileToSend.type === 'image') {
           // Store exact original image file (PNG, JPG, GIF, WebP) via cloud chunks or data URL
           const mediaKey = `img_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-          finalMediaUrl = await storeSharedMediaToCloud(mediaKey, selectedFile.file, {
-            fileName: selectedFile.name,
-            fileFormat: selectedFile.format,
-            fileSize: selectedFile.file.size
+          finalMediaUrl = await storeSharedMediaToCloud(mediaKey, fileToSend.file, {
+            fileName: fileToSend.name,
+            fileFormat: fileToSend.format,
+            fileSize: fileToSend.file.size
           });
-        } else if (selectedFile.type === 'video') {
+        } else if (fileToSend.type === 'video') {
           // Extract poster thumbnail frame with safe 1000ms max timeout
           const posterPromise = Promise.race([
-            captureVideoPoster(selectedFile.file),
+            captureVideoPoster(fileToSend.file),
             new Promise<string>((r) => setTimeout(() => r(''), 1000))
           ]);
           posterUrl = (await posterPromise) || undefined;
@@ -244,18 +252,18 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           const mediaKey = `vid_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
 
           // Store exact original video file (MP4, WebM, MOV, etc.) into cloud chunks + local IndexedDB
-          finalMediaUrl = await storeSharedMediaToCloud(mediaKey, selectedFile.file, {
-            fileName: selectedFile.name,
-            fileFormat: selectedFile.format || 'mp4',
-            fileSize: selectedFile.file.size
+          finalMediaUrl = await storeSharedMediaToCloud(mediaKey, fileToSend.file, {
+            fileName: fileToSend.name,
+            fileFormat: fileToSend.format || 'mp4',
+            fileSize: fileToSend.file.size
           });
         } else {
           // Audio, Document, or File attachment
           const mediaKey = `file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-          finalMediaUrl = await storeSharedMediaToCloud(mediaKey, selectedFile.file, {
-            fileName: selectedFile.name,
-            fileFormat: selectedFile.format,
-            fileSize: selectedFile.file.size
+          finalMediaUrl = await storeSharedMediaToCloud(mediaKey, fileToSend.file, {
+            fileName: fileToSend.name,
+            fileFormat: fileToSend.format,
+            fileSize: fileToSend.file.size
           });
         }
 
@@ -263,20 +271,16 @@ export const MessageInput: React.FC<MessageInputProps> = ({
           text: finalMessageText,
           mediaUrl: finalMediaUrl,
           posterUrl: posterUrl,
-          mediaType: selectedFile.type,
-          fileName: selectedFile.name,
-          fileSize: selectedFile.size,
-          fileFormat: selectedFile.format
+          mediaType: fileToSend.type,
+          fileName: fileToSend.name,
+          fileSize: fileToSend.size,
+          fileFormat: fileToSend.format
         });
-
-        setSelectedFile(null);
-        setText('');
       } else {
         await onSendMessage({
           text: finalMessageText,
           mediaType: 'none'
         });
-        setText('');
       }
     } catch (err) {
       console.error("Failed to send message:", err);
