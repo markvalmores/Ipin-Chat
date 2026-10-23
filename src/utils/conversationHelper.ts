@@ -1,5 +1,6 @@
 import { ActivePresence, Conversation, UserProfile } from '../types';
 import { DEMO_USERS } from '../services/sampleData';
+import { extractNormalizedParticipantData, normalizeEmailKey, normalizeNameKey } from './profileDeduplicator';
 
 export type ResolvedRealtimeStatus = 'online' | 'busy' | 'offline';
 
@@ -117,12 +118,13 @@ export function isUserOnline(
 
 /**
  * Returns the proper title, avatar, and other user information for a conversation,
- * ensuring direct chats ALWAYS show the other user's real name instead of "Chat".
+ * ensuring direct chats ALWAYS show the other user's real name instead of "Chat" or the current user's own name.
  */
 export function getConversationDisplay(
   conversation?: Conversation | null,
   currentUserId?: string,
-  allUsers: UserProfile[] = []
+  allUsers: UserProfile[] = [],
+  currentUserName?: string
 ): {
   title: string;
   avatar: string;
@@ -143,31 +145,113 @@ export function getConversationDisplay(
     conversation.id.startsWith('dm_');
 
   if (isDirect) {
-    // Find the other user's ID
-    const otherUid =
-      conversation.participantIds?.find((id) => id !== currentUserId && id !== 'all-users') ||
-      (conversation.id.startsWith('dm_xiaoai') ? 'ipin_ai_xiaoai' : undefined) ||
-      (conversation.id.includes('_dm_')
-        ? conversation.id.split('_dm_').find((id) => id !== currentUserId)
-        : undefined);
+    let resolvedMyName = currentUserName || '';
+    let resolvedMyEmail = '';
+    if (!resolvedMyName) {
+      try {
+        const stored = localStorage.getItem('ipin_active_user');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          resolvedMyName = parsed?.displayName || '';
+          resolvedMyEmail = parsed?.email || '';
+        }
+      } catch (e) {}
+    }
 
-    // Look up in allUsers (from Firebase) or DEMO_USERS by UID first
-    let foundUser =
-      (otherUid ? allUsers.find((u) => u.uid === otherUid) : null) ||
-      (otherUid ? DEMO_USERS.find((u) => u.uid === otherUid) : null);
+    const myNameKey = normalizeNameKey(resolvedMyName);
+    const myEmailKey = normalizeEmailKey(resolvedMyEmail);
 
-    // If not found by UID, also check participantData or conversation.title against allUsers by displayName
-    if (!foundUser) {
-      const candidateName =
-        (otherUid && conversation.participantData?.[otherUid]?.displayName) ||
-        (conversation.title && conversation.title !== 'Chat' ? conversation.title : '');
-      if (candidateName) {
-        const lowerCandidate = candidateName.trim().toLowerCase();
-        foundUser =
-          allUsers.find((u) => u.uid !== currentUserId && (u.displayName || '').trim().toLowerCase() === lowerCandidate) ||
-          DEMO_USERS.find((u) => u.uid !== currentUserId && (u.displayName || '').trim().toLowerCase() === lowerCandidate) ||
-          null;
+    const isMe = (uid?: string, name?: string, email?: string): boolean => {
+      if (uid && currentUserId && uid === currentUserId) return true;
+      const nKey = normalizeNameKey(name);
+      if (myNameKey && nKey && nKey === myNameKey) return true;
+      const eKey = normalizeEmailKey(email);
+      if (myEmailKey && eKey && eKey === myEmailKey) return true;
+      return false;
+    };
+
+    const pDataMap = extractNormalizedParticipantData(conversation);
+
+    // 1. Find the other participant from participantData (any entry that is NOT me)
+    let otherUid: string | undefined;
+    let otherPData: { displayName: string; email?: string; photoURL?: string; location?: string } | undefined;
+
+    for (const [uid, pData] of Object.entries(pDataMap)) {
+      if (!isMe(uid, pData?.displayName, pData?.email)) {
+        otherUid = uid;
+        otherPData = pData;
+        break;
       }
+    }
+
+    // 2. Also check participantIds and _dm_ segments
+    if (!otherUid) {
+      if (conversation.id.startsWith('dm_xiaoai')) {
+        otherUid = 'ipin_ai_xiaoai';
+      } else {
+        const candidateIds = Array.from(
+          new Set([
+            ...(conversation.participantIds || []),
+            ...(conversation.id.includes('_dm_') ? conversation.id.split('_dm_') : [])
+          ])
+        ).filter((id) => id && id !== 'all-users');
+
+        for (const id of candidateIds) {
+          const matchedUser =
+            allUsers.find((u) => u.uid === id) ||
+            DEMO_USERS.find((u) => u.uid === id);
+          if (!isMe(id, matchedUser?.displayName, matchedUser?.email)) {
+            otherUid = id;
+            break;
+          }
+        }
+      }
+    }
+
+    // 3. Look up in allUsers (from Firebase) or DEMO_USERS by UID first
+    let foundUser =
+      (otherUid ? allUsers.find((u) => u.uid === otherUid && !isMe(u.uid, u.displayName, u.email)) : null) ||
+      (otherUid ? DEMO_USERS.find((u) => u.uid === otherUid && !isMe(u.uid, u.displayName, u.email)) : null);
+
+    // 4. Determine candidate name for the OTHER user (never using conversation.title if it equals MY name!)
+    const titleIsNotMe =
+      conversation.title &&
+      conversation.title !== 'Chat' &&
+      (!myNameKey || normalizeNameKey(conversation.title) !== myNameKey);
+
+    const senderIsNotMe =
+      conversation.lastMessageSender &&
+      conversation.lastMessageSender !== 'System' &&
+      (!myNameKey || normalizeNameKey(conversation.lastMessageSender) !== myNameKey);
+
+    const otherNameFromList = (conversation.participantNames || []).find(
+      (n) => normalizeNameKey(n) && normalizeNameKey(n) !== myNameKey
+    );
+
+    const candidateName =
+      otherPData?.displayName ||
+      otherNameFromList ||
+      (titleIsNotMe ? conversation.title! : '') ||
+      (senderIsNotMe ? conversation.lastMessageSender! : '');
+
+    // If not found by UID, check candidateName or email against allUsers
+    if (!foundUser && (candidateName || otherPData?.email)) {
+      const lowerCandidate = normalizeNameKey(candidateName);
+      const lowerEmail = normalizeEmailKey(otherPData?.email);
+      foundUser =
+        allUsers.find(
+          (u) =>
+            !isMe(u.uid, u.displayName, u.email) &&
+            ((lowerEmail && normalizeEmailKey(u.email) === lowerEmail) ||
+              (lowerCandidate && normalizeNameKey(u.displayName) === lowerCandidate))
+        ) ||
+        DEMO_USERS.find(
+          (u) =>
+            !isMe(u.uid, u.displayName, u.email) &&
+            ((lowerEmail && normalizeEmailKey(u.email) === lowerEmail) ||
+              (lowerCandidate && normalizeNameKey(u.displayName) === lowerCandidate))
+        ) ||
+        null;
     }
 
     if (foundUser) {
@@ -179,56 +263,33 @@ export function getConversationDisplay(
       };
     }
 
-    // Look up in participantData
-    if (otherUid && conversation.participantData?.[otherUid]) {
-      const pData = conversation.participantData[otherUid];
+    if (otherPData && otherPData.displayName) {
+      const resolvedUid = otherUid || `user_${normalizeNameKey(otherPData.displayName).replace(/[^a-z0-9]/g, '_')}`;
       const partialUser: UserProfile = {
-        uid: otherUid,
-        displayName: pData.displayName || 'Friend',
-        email: '',
-        photoURL: pData.photoURL,
-        location: pData.location
+        uid: resolvedUid,
+        displayName: otherPData.displayName,
+        email: otherPData.email || '',
+        photoURL: otherPData.photoURL,
+        location: otherPData.location
       };
       return {
-        title: pData.displayName || 'Friend',
-        avatar: pData.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${otherUid}`,
+        title: otherPData.displayName,
+        avatar: otherPData.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${resolvedUid}`,
         isDirect: true,
         otherUser: partialUser
       };
     }
 
-    // If participantData has another entry whose key !== currentUserId
-    if (conversation.participantData) {
-      const otherEntry = Object.entries(conversation.participantData).find(([uid]) => uid !== currentUserId);
-      if (otherEntry) {
-        const [entryUid, pData] = otherEntry;
-        const partialUser: UserProfile = {
-          uid: entryUid,
-          displayName: pData.displayName || conversation.title || 'Friend',
-          email: '',
-          photoURL: pData.photoURL || conversation.avatar,
-          location: pData.location
-        };
-        return {
-          title: partialUser.displayName,
-          avatar: partialUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${entryUid}`,
-          isDirect: true,
-          otherUser: partialUser
-        };
-      }
-    }
-
-    // If conversation.title is valid and not generic "Chat"
-    if (conversation.title && conversation.title !== 'Chat') {
-      const fallbackUid = otherUid || `user_${conversation.title.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+    if (candidateName) {
+      const fallbackUid = otherUid || `user_${normalizeNameKey(candidateName).replace(/[^a-z0-9]/g, '_')}`;
       const fallbackUser: UserProfile = {
         uid: fallbackUid,
-        displayName: conversation.title,
+        displayName: candidateName,
         email: '',
         photoURL: conversation.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${fallbackUid}`
       };
       return {
-        title: conversation.title,
+        title: candidateName,
         avatar: fallbackUser.photoURL!,
         isDirect: true,
         otherUser: fallbackUser

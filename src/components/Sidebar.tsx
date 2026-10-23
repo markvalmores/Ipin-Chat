@@ -281,39 +281,41 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <p className="text-[10px] font-bold text-zinc-400 px-3 py-1 uppercase tracking-wider">
                 Direct Message Active User
               </p>
-              <div className="space-y-1">
-                {DEMO_USERS.filter((u) => u.uid !== profile?.uid).map((demoUser) => {
-                  const uStatus = getUserRealtimeStatus(demoUser, activePresences, registeredUsers);
-                  return (
-                    <button
-                      key={demoUser.uid}
-                      type="button"
-                      onClick={() => {
-                        onStartDirectChat(demoUser);
-                        setShowNewChatDropdown(false);
-                      }}
-                      className="w-full p-2 rounded-xl flex items-center gap-2.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-left transition-colors"
-                    >
-                      <div className="relative">
-                        <img
-                          src={demoUser.photoURL}
-                          alt={demoUser.displayName}
-                          className="w-8 h-8 rounded-full object-cover"
-                        />
-                        <span
-                          className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-2 ring-white dark:ring-zinc-900 ${getStatusDotColor(uStatus)}`}
-                          title={getStatusLabel(uStatus)}
-                        />
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-200 truncate">
-                          {demoUser.displayName}
-                        </p>
-                        <p className="text-[10px] text-zinc-400 truncate">{demoUser.location}</p>
-                      </div>
-                    </button>
-                  );
-                })}
+              <div className="space-y-1 max-h-60 overflow-y-auto">
+                {(registeredUsers.length > 0 ? registeredUsers : DEMO_USERS)
+                  .filter((u) => u.uid !== profile?.uid)
+                  .map((targetUser) => {
+                    const uStatus = getUserRealtimeStatus(targetUser, activePresences, registeredUsers);
+                    return (
+                      <button
+                        key={targetUser.uid}
+                        type="button"
+                        onClick={() => {
+                          onStartDirectChat(targetUser);
+                          setShowNewChatDropdown(false);
+                        }}
+                        className="w-full p-2 rounded-xl flex items-center gap-2.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-left transition-colors"
+                      >
+                        <div className="relative">
+                          <img
+                            src={targetUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${targetUser.uid}`}
+                            alt={targetUser.displayName}
+                            className="w-8 h-8 rounded-full object-cover"
+                          />
+                          <span
+                            className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-2 ring-white dark:ring-zinc-900 ${getStatusDotColor(uStatus)}`}
+                            title={getStatusLabel(uStatus)}
+                          />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-200 truncate">
+                            {targetUser.displayName}
+                          </p>
+                          <p className="text-[10px] text-zinc-400 truncate">{targetUser.location || targetUser.email}</p>
+                        </div>
+                      </button>
+                    );
+                  })}
               </div>
 
               <div className="pt-2 mt-2 border-t border-zinc-100 dark:border-zinc-800">
@@ -534,8 +536,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         ) : (
           filteredConversations.map((conv) => {
-            const isActive = conv.id === activeConversationId;
-            const displayInfo = getConversationDisplay(conv, profile?.uid, registeredUsers);
+            const isActive =
+              conv.id === activeConversationId ||
+              Boolean(activeConversationId && conv.mergedConversationIds?.includes(activeConversationId));
+            const displayInfo = getConversationDisplay(conv, profile?.uid, registeredUsers, profile?.displayName);
             const otherStatus = displayInfo.otherUser
               ? getUserRealtimeStatus(displayInfo.otherUser, activePresences, registeredUsers)
               : 'online';

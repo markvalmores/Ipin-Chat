@@ -69,15 +69,11 @@ export function isGhostProfile(u?: Partial<UserProfile> | null): boolean {
 }
 
 /**
- * Scores a profile so that when 2 identical profiles exist for the same person/email,
- * we always pick the most authentic, complete profile tied to the original email account.
+ * Scores a profile deterministically across all clients so that when 2 identical profiles exist
+ * for the same person/email, every user's device picks the exact same 1 canonical profile and UID.
  */
-function scoreProfile(u: UserProfile, preferredUid?: string): number {
+function scoreProfile(u: UserProfile): number {
   let score = 0;
-
-  if (preferredUid && u.uid === preferredUid) {
-    score += 40;
-  }
 
   // Strongly prefer real original email accounts (e.g. @gmail.com) over synthetic @ipin.chat
   if (!isSyntheticEmail(u.email, u.uid)) {
@@ -111,14 +107,6 @@ function scoreProfile(u: UserProfile, preferredUid?: string): number {
     score += 15;
   }
 
-  if (u.lastActive) {
-    const t = new Date(u.lastActive).getTime();
-    if (!isNaN(t)) {
-      // Small tie-breaker for most recently active
-      score += Math.min(25, Math.max(0, Math.floor((t - 1700000000000) / 100000000)));
-    }
-  }
-
   return score;
 }
 
@@ -128,9 +116,13 @@ function scoreProfile(u: UserProfile, preferredUid?: string): number {
  */
 export function mergeDuplicateProfiles(
   profiles: UserProfile[],
-  preferredUid?: string
+  _preferredUid?: string
 ): { canonical: UserProfile; duplicateUids: string[] } {
-  const sorted = [...profiles].sort((a, b) => scoreProfile(b, preferredUid) - scoreProfile(a, preferredUid));
+  const sorted = [...profiles].sort((a, b) => {
+    const diff = scoreProfile(b) - scoreProfile(a);
+    if (diff !== 0) return diff;
+    return (a.uid || '').localeCompare(b.uid || '');
+  });
   const primary = sorted[0];
 
   // Find the best original email (non-synthetic @gmail.com etc. first)
@@ -530,21 +522,66 @@ export async function purgeGhostAndDuplicateProfilesInFirestore(
 }
 
 /**
+ * Extracts and normalizes participantData from a Conversation object,
+ * including recovering any legacy top-level `"participantData.<uid>"` fields written by setDoc.
+ */
+export function extractNormalizedParticipantData(
+  conv: Conversation
+): Record<string, { displayName: string; email?: string; photoURL?: string; location?: string }> {
+  const map: Record<string, { displayName: string; email?: string; photoURL?: string; location?: string }> = {
+    ...(conv.participantData || {})
+  };
+
+  const rawAny = conv as Record<string, any>;
+  Object.keys(rawAny).forEach((key) => {
+    if (key.startsWith('participantData.') && rawAny[key] && typeof rawAny[key] === 'object') {
+      const uid = key.slice('participantData.'.length);
+      if (uid) {
+        map[uid] = {
+          ...(map[uid] || {}),
+          ...rawAny[key]
+        };
+      }
+    }
+  });
+
+  return map;
+}
+
+/**
  * Deduplicates direct conversations so that if 2 direct conversation documents exist
  * for the same other person (e.g. one with their old duplicate UID and one with their canonical UID),
- * only 1 direct conversation per person is shown.
+ * only 1 direct conversation per person is shown AND all underlying conversation IDs are merged
+ * into `mergedConversationIds` so messages from all of them are displayed in real time.
  */
 export function deduplicateConversationsList(
   conversations: Conversation[],
   currentUserId: string,
   allCanonicalUsers: UserProfile[] = [],
-  currentUserName?: string
+  currentUserName?: string,
+  currentUserEmail?: string
 ): Conversation[] {
   const result: Conversation[] = [];
   const directByPartnerKey = new Map<string, Conversation>();
   const myNameKey = normalizeNameKey(currentUserName);
+  const myEmailKey = normalizeEmailKey(currentUserEmail);
 
-  for (const conv of conversations) {
+  const isMe = (uid?: string, name?: string, email?: string): boolean => {
+    if (uid && currentUserId && uid === currentUserId) return true;
+    const nKey = normalizeNameKey(name);
+    if (myNameKey && nKey && nKey === myNameKey) return true;
+    const eKey = normalizeEmailKey(email);
+    if (myEmailKey && eKey && eKey === myEmailKey) return true;
+    return false;
+  };
+
+  for (const rawConv of conversations) {
+    const pDataMap = extractNormalizedParticipantData(rawConv);
+    const conv: Conversation = {
+      ...rawConv,
+      participantData: pDataMap
+    };
+
     const isDirect =
       conv.type === 'direct' ||
       conv.id.includes('_dm_') ||
@@ -555,59 +592,129 @@ export function deduplicateConversationsList(
       continue;
     }
 
-    // Identify the other participant
-    const otherUid =
-      conv.participantIds?.find((id) => id !== currentUserId && id !== 'all-users') ||
-      (conv.id.includes('_dm_')
-        ? conv.id.split('_dm_').find((id) => id !== currentUserId)
-        : undefined);
+    // 1. Find the OTHER participant from participantData (any entry that is NOT me)
+    let otherUid: string | undefined;
+    let otherParticipantData: { displayName: string; email?: string; photoURL?: string; location?: string } | undefined;
 
-    const otherParticipantData =
-      (otherUid && conv.participantData?.[otherUid]) ||
-      (conv.participantData
-        ? Object.entries(conv.participantData).find(([uid]) => uid !== currentUserId)?.[1]
-        : undefined);
+    for (const [uid, pData] of Object.entries(pDataMap)) {
+      if (!isMe(uid, pData?.displayName, pData?.email)) {
+        otherUid = uid;
+        otherParticipantData = pData;
+        break;
+      }
+    }
+
+    // 2. Also check participantIds and _dm_ segments
+    const candidateUids = Array.from(
+      new Set([
+        ...(conv.participantIds || []),
+        ...(conv.id.includes('_dm_') ? conv.id.split('_dm_') : [])
+      ])
+    ).filter((id) => id && id !== 'all-users');
+
+    if (!otherUid) {
+      for (const id of candidateUids) {
+        const userMatch = allCanonicalUsers.find((u) => u.uid === id);
+        if (!isMe(id, userMatch?.displayName, userMatch?.email)) {
+          otherUid = id;
+          if (!otherParticipantData && pDataMap[id]) {
+            otherParticipantData = pDataMap[id];
+          }
+          break;
+        }
+      }
+    }
+
+    // 3. Determine the other person's name (never using conv.title if conv.title is MY own name!)
+    const titleNameKey = normalizeNameKey(conv.title);
+    const titleIsNotMe =
+      conv.title &&
+      conv.title !== 'Chat' &&
+      (!myNameKey || titleNameKey !== myNameKey);
+
+    const senderNameKey = normalizeNameKey(conv.lastMessageSender);
+    const senderIsNotMe =
+      conv.lastMessageSender &&
+      conv.lastMessageSender !== 'System' &&
+      (!myNameKey || senderNameKey !== myNameKey);
+
+    const otherNameFromList = (conv.participantNames || []).find(
+      (n) => normalizeNameKey(n) && normalizeNameKey(n) !== myNameKey
+    );
 
     const rawOtherName =
       otherParticipantData?.displayName ||
-      (conv.title && conv.title !== 'Chat' ? conv.title : '');
-    const otherNameKey = normalizeNameKey(rawOtherName);
+      otherNameFromList ||
+      (titleIsNotMe ? conv.title! : '') ||
+      (senderIsNotMe ? conv.lastMessageSender! : '');
 
-    // Filter out ghost self-chats or chats with ghost "ipin User"
-    if (otherNameKey && GHOST_NAMES.has(otherNameKey)) {
+    const otherNameKey = normalizeNameKey(rawOtherName);
+    const otherEmailKey = normalizeEmailKey(otherParticipantData?.email);
+
+    // Filter out ghost chats with placeholder "ipin User"
+    if (otherNameKey && GHOST_NAMES.has(otherNameKey) && !otherUid) {
       continue;
     }
-    if (myNameKey && otherNameKey && otherNameKey === myNameKey) {
+
+    // Only skip if this is genuinely a self-chat (no otherUid and every participant is me)
+    if (!otherUid && !otherNameKey && candidateUids.length > 0 && candidateUids.every((id) => id === currentUserId)) {
       continue;
     }
 
     // Match against canonical users to unify by canonical person
     const matchedCanonicalUser = allCanonicalUsers.find(
       (u) =>
-        (otherUid && u.uid === otherUid) ||
-        (otherNameKey && normalizeNameKey(u.displayName) === otherNameKey)
+        !isMe(u.uid, u.displayName, u.email) &&
+        ((otherUid && u.uid === otherUid) ||
+          (otherEmailKey && normalizeEmailKey(u.email) === otherEmailKey) ||
+          (otherNameKey && normalizeNameKey(u.displayName) === otherNameKey))
     );
 
     const partnerKey =
       matchedCanonicalUser?.uid ||
       (matchedCanonicalUser?.email && normalizeEmailKey(matchedCanonicalUser.email)) ||
+      otherEmailKey ||
       otherNameKey ||
       otherUid ||
       conv.id;
 
     const existing = directByPartnerKey.get(partnerKey);
     if (!existing) {
-      directByPartnerKey.set(partnerKey, conv);
+      directByPartnerKey.set(partnerKey, {
+        ...conv,
+        mergedConversationIds: Array.from(new Set([...(conv.mergedConversationIds || []), conv.id]))
+      });
     } else {
-      // Keep the conversation that has real messages or the most recent activity
+      // Combine mergedConversationIds, participantIds, and participantData from both!
+      const combinedConvIds = Array.from(
+        new Set([
+          ...(existing.mergedConversationIds || [existing.id]),
+          ...(conv.mergedConversationIds || [conv.id]),
+          existing.id,
+          conv.id
+        ])
+      );
+      const combinedParticipantIds = Array.from(
+        new Set([...(existing.participantIds || []), ...(conv.participantIds || [])])
+      );
+      const combinedParticipantData = {
+        ...(existing.participantData || {}),
+        ...(conv.participantData || {})
+      };
+
       const timeExisting = new Date(existing.lastMessageTime || existing.updatedAt || 0).getTime();
       const timeCurrent = new Date(conv.lastMessageTime || conv.updatedAt || 0).getTime();
       const existingIsDefault = !existing.lastMessageText || existing.lastMessageText === 'Started conversation';
       const currentIsDefault = !conv.lastMessageText || conv.lastMessageText === 'Started conversation';
 
-      if ((existingIsDefault && !currentIsDefault) || timeCurrent > timeExisting) {
-        directByPartnerKey.set(partnerKey, conv);
-      }
+      const winner = (existingIsDefault && !currentIsDefault) || timeCurrent > timeExisting ? conv : existing;
+      directByPartnerKey.set(partnerKey, {
+        ...existing,
+        ...winner,
+        participantIds: combinedParticipantIds,
+        participantData: combinedParticipantData,
+        mergedConversationIds: combinedConvIds
+      });
     }
   }
 

@@ -36,8 +36,12 @@ export interface Conversation {
   description?: string;
   avatar?: string;
   participantIds: string[];
+  participantEmails?: string[];
+  participantNames?: string[];
+  mergedConversationIds?: string[];
   participantData?: Record<string, {
     displayName: string;
+    email?: string;
     photoURL?: string;
     location?: string;
   }>;
@@ -66,6 +70,7 @@ export interface Message {
   conversationId: string;
   senderId: string;
   senderName: string;
+  senderEmail?: string;
   senderPhoto?: string;
   text?: string;
   mediaUrl?: string;

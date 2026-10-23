@@ -84,10 +84,11 @@ const MessengerInner: React.FC = () => {
       (list) => {
         setConversations(list);
       },
-      profile.displayName
+      profile.displayName,
+      profile.email
     );
     return () => unsubscribe();
-  }, [profile?.uid, profile?.displayName]);
+  }, [profile?.uid, profile?.displayName, profile?.email]);
 
   // Real-time all users listener
   useEffect(() => {
@@ -147,7 +148,12 @@ const MessengerInner: React.FC = () => {
     );
   }
 
-  const activeConversation = conversations.find((c) => c.id === activeConversationId) || conversations[0] || null;
+  const activeConversation =
+    conversations.find(
+      (c) => c.id === activeConversationId || c.mergedConversationIds?.includes(activeConversationId)
+    ) ||
+    conversations[0] ||
+    null;
 
   const handleSelectConversation = (id: string) => {
     setActiveConversationId(id);
@@ -158,7 +164,7 @@ const MessengerInner: React.FC = () => {
     if (!profile) return;
     const directConv = await getOrCreateDirectConversation(profile, targetUser);
     setConversations((prev) => {
-      if (!prev.some((c) => c.id === directConv.id)) {
+      if (!prev.some((c) => c.id === directConv.id || c.mergedConversationIds?.includes(directConv.id))) {
         return [directConv, ...prev];
       }
       return prev;

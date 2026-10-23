@@ -172,25 +172,41 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     return () => clearInterval(interval);
   }, []);
 
-  // Subscribe to real-time messages for active conversation
+  const displayInfo = getConversationDisplay(conversation, profile?.uid, allUsers, profile?.displayName);
+  const otherUser = displayInfo.otherUser;
+  const otherUserStatus = otherUser
+    ? getUserRealtimeStatus(otherUser, activePresences, allUsers)
+    : 'online';
+  const isOtherUserOnline = otherUserStatus === 'online' || otherUserStatus === 'busy';
+
+  // Subscribe to real-time messages for active conversation (and any merged twin direct conversation IDs)
+  const mergedIdsKey = (conversation?.mergedConversationIds || []).join(',');
   useEffect(() => {
     if (!conversation) return;
 
-    const unsubscribe = subscribeToMessages(conversation.id, (loaded) => {
-      setMessages(loaded);
+    const unsubscribe = subscribeToMessages(
+      conversation.id,
+      (loaded) => {
+        setMessages(loaded);
 
-      // Auto mark unread as read
-      if (profile) {
-        loaded.forEach((m) => {
-          if (!m.readBy?.includes(profile.uid)) {
-            markMessageRead(conversation.id, m.id, profile.uid);
-          }
-        });
+        // Auto mark unread as read
+        if (profile) {
+          loaded.forEach((m) => {
+            if (!m.readBy?.includes(profile.uid)) {
+              markMessageRead(m.conversationId || conversation.id, m.id, profile.uid);
+            }
+          });
+        }
+      },
+      {
+        mergedConversationIds: conversation.mergedConversationIds,
+        currentUser: profile,
+        otherUser
       }
-    });
+    );
 
     return () => unsubscribe();
-  }, [conversation?.id, profile?.uid]);
+  }, [conversation?.id, mergedIdsKey, profile?.uid, otherUser?.uid, otherUser?.displayName]);
 
   // Scroll to bottom on new message
   useEffect(() => {
@@ -216,21 +232,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const handleSendMessage = async (data: {
     text?: string;
     mediaUrl?: string;
+    posterUrl?: string;
     mediaType?: Message['mediaType'];
     fileName?: string;
     fileSize?: number;
     fileFormat?: string;
   }) => {
     if (!profile) return;
-    await sendMessage(conversation.id, profile, data);
+    await sendMessage(conversation.id, profile, data, {
+      otherUser,
+      mergedConversationIds: conversation.mergedConversationIds
+    });
   };
-
-  const displayInfo = getConversationDisplay(conversation, profile?.uid, allUsers);
-  const otherUser = displayInfo.otherUser;
-  const otherUserStatus = otherUser
-    ? getUserRealtimeStatus(otherUser, activePresences, allUsers)
-    : 'online';
-  const isOtherUserOnline = otherUserStatus === 'online' || otherUserStatus === 'busy';
 
   const handleOpenHeaderProfile = () => {
     if (otherUser) {
@@ -615,7 +628,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
         {/* Message Items */}
         {messages.map((msg, index) => {
-          const isSelf = profile?.uid === msg.senderId;
+          const isSelf = Boolean(
+            profile &&
+              (profile.uid === msg.senderId ||
+                (profile.email &&
+                  msg.senderEmail &&
+                  profile.email.trim().toLowerCase() === msg.senderEmail.trim().toLowerCase()) ||
+                (profile.displayName &&
+                  msg.senderName &&
+                  profile.displayName.replace(/\s*\(google\)\s*/gi, '').trim().toLowerCase() ===
+                    msg.senderName.replace(/\s*\(google\)\s*/gi, '').trim().toLowerCase()))
+          );
           const prevMsg = messages[index - 1];
           const showSenderInfo = conversation.type === 'group' && (!prevMsg || prevMsg.senderId !== msg.senderId);
 
@@ -623,7 +646,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             <MessageItem
               key={msg.id}
               message={msg}
-              conversationId={conversation.id}
+              conversationId={msg.conversationId || conversation.id}
               isSelf={isSelf}
               showSenderInfo={showSenderInfo}
               onPreviewMedia={(media) => setSelectedMedia(media)}

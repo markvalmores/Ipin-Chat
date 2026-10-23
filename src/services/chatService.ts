@@ -24,8 +24,49 @@ import {
   cleanDisplayName,
   deduplicateConversationsList,
   deduplicateUserProfiles,
+  extractNormalizedParticipantData,
+  normalizeEmailKey,
   normalizeNameKey
 } from '../utils/profileDeduplicator';
+
+function doesDirectConvMatchUser(
+  c: Conversation,
+  target?: { uid?: string; displayName?: string; email?: string } | null
+): boolean {
+  if (!target) return false;
+  const uid = target.uid || '';
+  const nameKey = normalizeNameKey(target.displayName);
+  const emailKey = normalizeEmailKey(target.email);
+
+  if (uid && c.participantIds?.includes(uid)) return true;
+  if (uid && c.id?.includes(uid)) return true;
+  if (emailKey && c.participantEmails?.some((e) => normalizeEmailKey(e) === emailKey)) return true;
+  if (nameKey && nameKey !== 'user' && nameKey !== 'friend' && nameKey !== 'ipin user') {
+    if (c.participantNames?.some((n) => normalizeNameKey(n) === nameKey)) return true;
+    if (normalizeNameKey(c.title) === nameKey) return true;
+  }
+
+  const pData = extractNormalizedParticipantData(c);
+  for (const [entryUid, entry] of Object.entries(pData)) {
+    if (uid && entryUid === uid) return true;
+    if (emailKey && normalizeEmailKey(entry?.email) === emailKey) return true;
+    if (nameKey && nameKey !== 'user' && nameKey !== 'friend' && normalizeNameKey(entry?.displayName) === nameKey) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function doesDirectConvMatchPair(
+  c: Conversation,
+  userA?: { uid?: string; displayName?: string; email?: string } | null,
+  userB?: { uid?: string; displayName?: string; email?: string } | null
+): boolean {
+  if (!userA || !userB) return false;
+  const isDirect = c.type === 'direct' || c.id?.includes('_dm_') || c.id?.startsWith('dm_');
+  if (!isDirect) return false;
+  return doesDirectConvMatchUser(c, userA) && doesDirectConvMatchUser(c, userB);
+}
 
 // Send a new message
 export async function sendMessage(
@@ -39,15 +80,21 @@ export async function sendMessage(
     fileName?: string;
     fileSize?: number;
     fileFormat?: string;
+  },
+  recipientInfo?: {
+    otherUser?: UserProfile | null;
+    mergedConversationIds?: string[];
   }
 ): Promise<string> {
   const convRef = doc(db, 'conversations', conversationId);
   const messageId = `msg-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const nowIso = new Date().toISOString();
   const messageData: Message = {
     id: messageId,
     conversationId,
     senderId: sender.uid,
-    senderName: sender.displayName || 'User',
+    senderName: cleanDisplayName(sender.displayName) || sender.displayName || 'User',
+    senderEmail: sender.email || '',
     senderPhoto: sender.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${sender.uid}`,
     text: data.text || '',
     mediaUrl: data.mediaUrl || '',
@@ -58,22 +105,32 @@ export async function sendMessage(
     fileFormat: data.fileFormat || '',
     reactions: {},
     readBy: [sender.uid],
-    createdAt: new Date().toISOString()
+    createdAt: nowIso
   };
 
-  // 1. Optimistic memory & local storage update
-  if (!INITIAL_CHANNEL_MESSAGES[conversationId]) {
-    INITIAL_CHANNEL_MESSAGES[conversationId] = [];
-  }
-  INITIAL_CHANNEL_MESSAGES[conversationId].push(messageData);
+  const targetConvIds = Array.from(
+    new Set([conversationId, ...(recipientInfo?.mergedConversationIds || [])].filter(Boolean))
+  );
 
-  try {
-    const localKey = `ipin_msgs_${conversationId}`;
-    const raw = localStorage.getItem(localKey);
-    const list: Message[] = raw ? JSON.parse(raw) : [];
-    list.push(messageData);
-    localStorage.setItem(localKey, JSON.stringify(list.slice(-200)));
-  } catch (e) {}
+  // 1. Optimistic memory & local storage update across all merged conversation IDs
+  targetConvIds.forEach((cid) => {
+    if (!INITIAL_CHANNEL_MESSAGES[cid]) {
+      INITIAL_CHANNEL_MESSAGES[cid] = [];
+    }
+    if (!INITIAL_CHANNEL_MESSAGES[cid].some((m) => m.id === messageId)) {
+      INITIAL_CHANNEL_MESSAGES[cid].push(messageData);
+    }
+
+    try {
+      const localKey = `ipin_msgs_${cid}`;
+      const raw = localStorage.getItem(localKey);
+      const list: Message[] = raw ? JSON.parse(raw) : [];
+      if (!list.some((m) => m.id === messageId)) {
+        list.push(messageData);
+        localStorage.setItem(localKey, JSON.stringify(list.slice(-200)));
+      }
+    } catch (e) {}
+  });
 
   // 2. Cross-tab instant broadcast
   try {
@@ -91,41 +148,117 @@ export async function sendMessage(
         ? `[${data.fileFormat?.toUpperCase() || data.mediaType.toUpperCase()}] ${data.text || data.fileName || 'Media Attachment'}`
         : (data.text || 'Message');
 
-      const defaultChannel = INITIAL_PUBLIC_CHANNELS.find(c => c.id === conversationId);
+      const defaultChannel = INITIAL_PUBLIC_CHANNELS.find((c) => c.id === conversationId);
+      const otherUser = recipientInfo?.otherUser;
+      const isDirect =
+        !defaultChannel &&
+        (conversationId.includes('_dm_') || conversationId.startsWith('dm_') || Boolean(otherUser));
 
       const updateData: Record<string, any> = {
         id: conversationId,
         lastMessageText: lastPreview,
-        lastMessageSender: sender.displayName || 'User',
-        lastMessageTime: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        lastMessageSender: cleanDisplayName(sender.displayName) || sender.displayName || 'User',
+        lastMessageTime: nowIso,
+        updatedAt: nowIso
       };
 
       if (defaultChannel) {
         updateData.type = defaultChannel.type;
         updateData.title = defaultChannel.title;
         updateData.avatar = defaultChannel.avatar;
-      } else if (conversationId.includes('_dm_')) {
-        const dmParts = conversationId.split('_dm_').filter(Boolean);
-        updateData.type = 'direct';
-        updateData.participantIds = Array.from(new Set([...dmParts, sender.uid]));
-        updateData[`participantData.${sender.uid}`] = {
-          displayName: sender.displayName || 'User',
-          photoURL: sender.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${sender.uid}`,
-          location: sender.location || 'Global Bridge 🌏'
+      } else if (isDirect) {
+        const dmParts = conversationId.includes('_dm_')
+          ? conversationId.split('_dm_').filter(Boolean)
+          : [];
+        const pIds = new Set<string>([...dmParts, sender.uid]);
+        if (otherUser?.uid) pIds.add(otherUser.uid);
+
+        const pEmails = new Set<string>();
+        if (sender.email) pEmails.add(normalizeEmailKey(sender.email));
+        if (otherUser?.email) pEmails.add(normalizeEmailKey(otherUser.email));
+
+        const pNames = new Set<string>();
+        if (sender.displayName) pNames.add(cleanDisplayName(sender.displayName) || sender.displayName);
+        if (otherUser?.displayName) pNames.add(cleanDisplayName(otherUser.displayName) || otherUser.displayName);
+
+        const nestedParticipantData: Record<string, any> = {
+          [sender.uid]: {
+            displayName: cleanDisplayName(sender.displayName) || sender.displayName || 'User',
+            email: sender.email || '',
+            photoURL: sender.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${sender.uid}`,
+            location: sender.location || 'Global Bridge 🌏'
+          }
         };
+
+        if (otherUser?.uid) {
+          nestedParticipantData[otherUser.uid] = {
+            displayName: cleanDisplayName(otherUser.displayName) || otherUser.displayName || 'Friend',
+            email: otherUser.email || '',
+            photoURL: otherUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${otherUser.uid}`,
+            location: otherUser.location || 'Global Bridge 🌏'
+          };
+        }
+
+        updateData.type = 'direct';
+        updateData.participantIds = Array.from(pIds);
+        if (pEmails.size > 0) updateData.participantEmails = Array.from(pEmails);
+        if (pNames.size > 0) updateData.participantNames = Array.from(pNames);
+        updateData.participantData = nestedParticipantData;
       }
 
-      await Promise.race([
+      // Write primary conversation update & message document
+      await Promise.all([
         setDoc(convRef, updateData, { merge: true }),
-        new Promise((_, r) => setTimeout(() => r(new Error('sync timeout')), 8000))
+        setDoc(doc(db, 'conversations', conversationId, 'messages', messageId), messageData)
       ]);
 
-      const msgRef = doc(db, 'conversations', conversationId, 'messages', messageId);
-      await Promise.race([
-        setDoc(msgRef, messageData),
-        new Promise((_, r) => setTimeout(() => r(new Error('sync timeout')), 8000))
-      ]);
+      // If direct chat, also mirror to any twin/alternate direct conversation documents between these 2 users
+      // so the friend receives the message in real time even if they opened an older/alternate conversationId!
+      if (isDirect) {
+        const extraConvIds = new Set<string>(
+          (recipientInfo?.mergedConversationIds || []).filter((id) => id && id !== conversationId)
+        );
+
+        if (otherUser) {
+          const canonicalDirectId = [sender.uid, otherUser.uid].sort().join('_dm_');
+          if (canonicalDirectId !== conversationId) {
+            extraConvIds.add(canonicalDirectId);
+          }
+
+          try {
+            const convsSnap = await getDocs(collection(db, 'conversations'));
+            convsSnap.forEach((dSnap) => {
+              if (dSnap.id === conversationId) return;
+              const c = dSnap.data() as Conversation;
+              if (doesDirectConvMatchPair(c, sender, otherUser)) {
+                extraConvIds.add(dSnap.id);
+              }
+            });
+          } catch (e) {}
+        }
+
+        if (extraConvIds.size > 0) {
+          await Promise.allSettled(
+            Array.from(extraConvIds).flatMap((altId) => [
+              setDoc(
+                doc(db, 'conversations', altId),
+                {
+                  ...updateData,
+                  id: altId
+                },
+                { merge: true }
+              ),
+              setDoc(
+                doc(db, 'conversations', altId, 'messages', messageId),
+                {
+                  ...messageData,
+                  conversationId: altId
+                }
+              )
+            ])
+          );
+        }
+      }
     } catch (err) {
       console.warn('Firestore message sync notice:', err);
     }
@@ -308,44 +441,131 @@ export async function markMessageRead(
   }
 }
 
-// Subscribe to messages in a conversation
+// Subscribe to messages in a conversation (and any merged/twin direct conversation documents for the same friend)
 export function subscribeToMessages(
   conversationId: string,
-  onUpdate: (messages: Message[]) => void
+  onUpdate: (messages: Message[]) => void,
+  options?: {
+    mergedConversationIds?: string[];
+    currentUser?: UserProfile | null;
+    otherUser?: UserProfile | null;
+  }
 ) {
-  const messagesRef = collection(db, 'conversations', conversationId, 'messages');
-  const q = query(messagesRef, orderBy('createdAt', 'asc'));
+  const watchedConvIds = new Set<string>(
+    [conversationId, ...(options?.mergedConversationIds || [])].filter(Boolean)
+  );
 
-  const getStoredMessages = (): Message[] => {
-    const memory = INITIAL_CHANNEL_MESSAGES[conversationId] || [];
-    let local: Message[] = [];
-    try {
-      const raw = localStorage.getItem(`ipin_msgs_${conversationId}`);
-      if (raw) local = JSON.parse(raw);
-    } catch (e) {}
+  // If we know both users in a direct chat, also include their canonical sorted UID pair
+  if (options?.currentUser?.uid && options?.otherUser?.uid) {
+    watchedConvIds.add([options.currentUser.uid, options.otherUser.uid].sort().join('_dm_'));
+  }
 
+  const messagesByConv = new Map<string, Message[]>();
+  const subUnsubscribers = new Map<string, () => void>();
+
+  const getStoredMessagesForAll = (): Message[] => {
     const map = new Map<string, Message>();
-    memory.forEach((m) => map.set(m.id, m));
-    local.forEach((m) => map.set(m.id, { ...(map.get(m.id) || {}), ...m }));
+    watchedConvIds.forEach((cid) => {
+      const memory = INITIAL_CHANNEL_MESSAGES[cid] || [];
+      memory.forEach((m) => map.set(m.id, m));
+      try {
+        const raw = localStorage.getItem(`ipin_msgs_${cid}`);
+        if (raw) {
+          const local: Message[] = JSON.parse(raw);
+          local.forEach((m) => map.set(m.id, { ...(map.get(m.id) || {}), ...m }));
+        }
+      } catch (e) {}
+    });
+
     return Array.from(map.values()).sort(
-      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      (a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime()
     );
   };
 
-  let currentList = getStoredMessages();
+  let currentList = getStoredMessagesForAll();
   if (currentList.length > 0) {
     onUpdate(currentList);
+  }
+
+  const recomputeAndEmit = () => {
+    const map = new Map<string, Message>();
+    // Include local/optimistic messages first
+    currentList.forEach((m) => map.set(m.id, m));
+    // Merge all Firestore snapshots across all watched conversation IDs
+    messagesByConv.forEach((msgs) => {
+      msgs.forEach((m) => {
+        const existing = map.get(m.id);
+        map.set(m.id, { ...(existing || {}), ...m });
+      });
+    });
+
+    currentList = Array.from(map.values()).sort(
+      (a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime()
+    );
+    onUpdate(currentList);
+  };
+
+  const attachConversationMessagesListener = (cid: string) => {
+    if (!cid || subUnsubscribers.has(cid)) return;
+    watchedConvIds.add(cid);
+
+    const messagesRef = collection(db, 'conversations', cid, 'messages');
+    const unsub = onSnapshot(
+      messagesRef,
+      (snapshot) => {
+        const firestoreMsgs: Message[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data() as Message;
+          if (data && data.id) {
+            firestoreMsgs.push(data);
+          } else {
+            firestoreMsgs.push({ ...data, id: docSnap.id });
+          }
+        });
+        messagesByConv.set(cid, firestoreMsgs);
+        recomputeAndEmit();
+      },
+      () => {
+        recomputeAndEmit();
+      }
+    );
+
+    subUnsubscribers.set(cid, unsub);
+  };
+
+  // Attach listeners to initial known conversation IDs
+  Array.from(watchedConvIds).forEach((cid) => attachConversationMessagesListener(cid));
+
+  // If this is a direct chat and we have currentUser + otherUser, dynamically watch for any
+  // other direct conversation document in Firestore between these two users!
+  let unsubConvDiscovery: (() => void) | null = null;
+  if (options?.currentUser && options?.otherUser) {
+    const me = options.currentUser;
+    const friend = options.otherUser;
+    unsubConvDiscovery = onSnapshot(
+      collection(db, 'conversations'),
+      (snap) => {
+        snap.forEach((docSnap) => {
+          if (subUnsubscribers.has(docSnap.id)) return;
+          const c = docSnap.data() as Conversation;
+          if (doesDirectConvMatchPair(c, me, friend)) {
+            attachConversationMessagesListener(docSnap.id);
+          }
+        });
+      },
+      () => {}
+    );
   }
 
   // Cross-tab broadcast listener
   let bc: BroadcastChannel | null = null;
   const handleIncomingMessage = (newMsg: Message) => {
-    if (newMsg.conversationId !== conversationId) return;
+    if (!watchedConvIds.has(newMsg.conversationId)) return;
     const map = new Map<string, Message>();
     currentList.forEach((m) => map.set(m.id, m));
     map.set(newMsg.id, newMsg);
     currentList = Array.from(map.values()).sort(
-      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      (a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime()
     );
     onUpdate(currentList);
   };
@@ -363,36 +583,16 @@ export function subscribeToMessages(
 
   const windowHandler = (e: Event) => {
     const detail = (e as CustomEvent).detail;
-    if (detail && detail.conversationId === conversationId && detail.message) {
+    if (detail && watchedConvIds.has(detail.conversationId) && detail.message) {
       handleIncomingMessage(detail.message);
     }
   };
   window.addEventListener('ipin_new_message', windowHandler);
 
-  const unsubscribe = onSnapshot(q, (snapshot) => {
-    const firestoreMsgs: Message[] = [];
-    snapshot.forEach((docSnap) => {
-      firestoreMsgs.push(docSnap.data() as Message);
-    });
-
-    const map = new Map<string, Message>();
-    currentList.forEach((m) => map.set(m.id, m));
-    firestoreMsgs.forEach((m) => {
-      const existing = map.get(m.id);
-      map.set(m.id, { ...(existing || {}), ...m });
-    });
-
-    currentList = Array.from(map.values()).sort(
-      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-    );
-    onUpdate(currentList);
-  }, (error) => {
-    // Keep showing cached and broadcast messages
-    onUpdate(currentList);
-  });
-
   return () => {
-    unsubscribe();
+    subUnsubscribers.forEach((unsub) => unsub());
+    subUnsubscribers.clear();
+    if (unsubConvDiscovery) unsubConvDiscovery();
     window.removeEventListener('ipin_new_message', windowHandler);
     if (bc) bc.close();
   };
@@ -424,28 +624,27 @@ function saveLocalGroupChat(gc: Conversation) {
 export function subscribeToConversations(
   currentUserId: string,
   onUpdate: (conversations: Conversation[]) => void,
-  currentUserName?: string
+  currentUserName?: string,
+  currentUserEmail?: string
 ) {
   const convsRef = collection(db, 'conversations');
+  const usersRef = collection(db, 'users');
   const lowerCurrentName = normalizeNameKey(currentUserName);
+  const lowerCurrentEmail = normalizeEmailKey(currentUserEmail);
+
+  let latestFirestoreConvs: Conversation[] = [];
+  let latestCanonicalUsers: UserProfile[] = [...DEMO_USERS];
 
   const isUserParticipant = (c: Conversation): boolean => {
-    if (c.type === 'group') return true;
-    if (c.participantIds && c.participantIds.includes(currentUserId)) return true;
-    if (c.id && c.id.includes(currentUserId)) return true;
-    if (lowerCurrentName && lowerCurrentName !== 'user' && lowerCurrentName !== 'ipin user') {
-      if (normalizeNameKey(c.title) === lowerCurrentName) return true;
-      if (c.participantData) {
-        const matchedByName = Object.values(c.participantData).some(
-          (p) => normalizeNameKey(p?.displayName) === lowerCurrentName
-        );
-        if (matchedByName) return true;
-      }
-    }
-    return false;
+    if (c.type === 'group' || c.type === 'channel') return true;
+    return doesDirectConvMatchUser(c, {
+      uid: currentUserId,
+      displayName: currentUserName,
+      email: currentUserEmail
+    });
   };
 
-  const emitMerged = (firestoreList: Conversation[] = []) => {
+  const emitMerged = () => {
     const localList = getLocalGroupChats();
     const map = new Map<string, Conversation>();
 
@@ -460,7 +659,7 @@ export function subscribeToConversations(
     });
 
     // 3. Firestore conversations
-    firestoreList.forEach((c) => {
+    latestFirestoreConvs.forEach((c) => {
       if (isUserParticipant(c)) {
         map.set(c.id, { ...(map.get(c.id) || {}), ...c });
       }
@@ -469,34 +668,56 @@ export function subscribeToConversations(
     const merged = deduplicateConversationsList(
       Array.from(map.values()),
       currentUserId,
-      [],
-      currentUserName
+      latestCanonicalUsers,
+      lowerCurrentName ? currentUserName : undefined,
+      lowerCurrentEmail ? currentUserEmail : undefined
     );
 
     onUpdate(merged);
   };
 
   // Immediate emit
-  emitMerged([]);
+  emitMerged();
 
-  const unsubscribe = onSnapshot(convsRef, (snapshot) => {
-    const list: Conversation[] = [];
-    snapshot.forEach((docSnap) => {
-      const data = docSnap.data() as Conversation;
-      list.push(data);
-    });
-    emitMerged(list);
-  }, (error) => {
-    emitMerged([]);
-  });
+  const unsubscribeUsers = onSnapshot(
+    usersRef,
+    (uSnap) => {
+      const list: UserProfile[] = [];
+      uSnap.forEach((d) => {
+        const data = d.data() as UserProfile;
+        list.push({ ...data, uid: data.uid || d.id });
+      });
+      const { allCanonicalUsers } = deduplicateUserProfiles(list);
+      latestCanonicalUsers = allCanonicalUsers.length > 0 ? allCanonicalUsers : [...DEMO_USERS];
+      emitMerged();
+    },
+    () => {}
+  );
+
+  const unsubscribeConvs = onSnapshot(
+    convsRef,
+    (snapshot) => {
+      const list: Conversation[] = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data() as Conversation;
+        list.push({ ...data, id: data.id || docSnap.id });
+      });
+      latestFirestoreConvs = list;
+      emitMerged();
+    },
+    () => {
+      emitMerged();
+    }
+  );
 
   const handleGroupUpdate = () => {
-    emitMerged([]);
+    emitMerged();
   };
   window.addEventListener('ipin_group_updated', handleGroupUpdate);
 
   return () => {
-    unsubscribe();
+    unsubscribeConvs();
+    unsubscribeUsers();
     window.removeEventListener('ipin_group_updated', handleGroupUpdate);
   };
 }
@@ -648,13 +869,18 @@ export async function addMembersToGroupChat(
     if (newMemberIds.length > 0) {
       updates.participantIds = arrayUnion(...newMemberIds);
     }
-    newMemberProfiles.forEach((u) => {
-      updates[`participantData.${u.uid}`] = {
-        displayName: u.displayName,
-        photoURL: u.photoURL || '',
-        location: u.location || ''
-      };
-    });
+    if (newMemberProfiles.length > 0) {
+      const nestedPData: Record<string, any> = {};
+      newMemberProfiles.forEach((u) => {
+        nestedPData[u.uid] = {
+          displayName: cleanDisplayName(u.displayName) || u.displayName,
+          email: u.email || '',
+          photoURL: u.photoURL || '',
+          location: u.location || ''
+        };
+      });
+      updates.participantData = nestedPData;
+    }
 
     await setDoc(convRef, updates, { merge: true });
 
@@ -1121,90 +1347,117 @@ export async function getOrCreateDirectConversation(
 ): Promise<Conversation> {
   const directId = [currentUser.uid, otherUser.uid].sort().join('_dm_');
   const convRef = doc(db, 'conversations', directId);
+  const nowIso = new Date().toISOString();
 
-  const safeParticipantData = {
+  const myCleanName = cleanDisplayName(currentUser.displayName) || currentUser.displayName || 'User';
+  const otherCleanName = cleanDisplayName(otherUser.displayName) || otherUser.displayName || 'Friend';
+
+  const safeParticipantData: Record<string, { displayName: string; email?: string; photoURL?: string; location?: string }> = {
     [currentUser.uid]: {
-      displayName: currentUser.displayName || 'User',
+      displayName: myCleanName,
+      email: currentUser.email || '',
       photoURL: currentUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${currentUser.uid}`,
       location: currentUser.location || 'Global Bridge 🌏'
     },
     [otherUser.uid]: {
-      displayName: otherUser.displayName || 'Friend',
+      displayName: otherCleanName,
+      email: otherUser.email || '',
       photoURL: otherUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${otherUser.uid}`,
       location: otherUser.location || 'Global Bridge 🌏'
     }
   };
 
-  try {
-    const snap = await getDoc(convRef);
-    if (snap.exists()) {
-      const existing = snap.data() as Conversation;
-      const mergedParticipants = Array.from(
-        new Set([...(existing.participantIds || []), currentUser.uid, otherUser.uid])
-      );
-      const updatedConv: Conversation = {
-        ...existing,
-        id: directId,
-        type: 'direct',
-        participantIds: mergedParticipants,
-        participantData: {
-          ...(existing.participantData || {}),
-          ...safeParticipantData
-        }
-      };
-      await setDoc(convRef, updatedConv, { merge: true });
-      return updatedConv;
-    }
+  const participantEmails = Array.from(
+    new Set([normalizeEmailKey(currentUser.email), normalizeEmailKey(otherUser.email)].filter(Boolean))
+  );
+  const participantNames = Array.from(new Set([myCleanName, otherCleanName].filter(Boolean)));
 
-    // Check if a direct conversation already exists between these two users by displayName/UID
-    const myName = (currentUser.displayName || '').trim().toLowerCase();
-    const otherName = (otherUser.displayName || '').trim().toLowerCase();
-    if (myName && otherName) {
-      try {
-        const qDirect = query(collection(db, 'conversations'), where('type', '==', 'direct'));
-        const qSnap = await getDocs(qDirect);
-        let matchedConv: Conversation | null = null;
-        qSnap.forEach((d) => {
-          const c = d.data() as Conversation;
-          if (!c.participantData) return;
-          const names = Object.values(c.participantData).map((p) => (p?.displayName || '').trim().toLowerCase());
-          if (names.includes(myName) && names.includes(otherName)) {
-            matchedConv = c;
-          }
-        });
-        if (matchedConv) {
-          const found = matchedConv as Conversation;
-          const matchedRef = doc(db, 'conversations', found.id);
-          const mergedParticipants = Array.from(
-            new Set([...(found.participantIds || []), currentUser.uid, otherUser.uid])
-          );
-          const unifiedConv: Conversation = {
-            ...found,
-            participantIds: mergedParticipants,
-            participantData: {
-              ...(found.participantData || {}),
-              ...safeParticipantData
-            },
-            updatedAt: new Date().toISOString()
-          };
-          await setDoc(matchedRef, unifiedConv, { merge: true });
-          return unifiedConv;
+  try {
+    // Scan Firestore for ANY existing direct conversations between these two users (by UID, email, or displayName)
+    const matchedDocs: Conversation[] = [];
+    try {
+      const allConvsSnap = await getDocs(collection(db, 'conversations'));
+      allConvsSnap.forEach((dSnap) => {
+        const c = { ...(dSnap.data() as Conversation), id: dSnap.id };
+        if (dSnap.id === directId || doesDirectConvMatchPair(c, currentUser, otherUser)) {
+          matchedDocs.push(c);
         }
-      } catch (e) {}
+      });
+    } catch (e) {}
+
+    if (matchedDocs.length > 0) {
+      // Sort so the conversation with real messages / latest activity comes first
+      matchedDocs.sort((a, b) => {
+        const aDefault = !a.lastMessageText || a.lastMessageText === 'Started conversation';
+        const bDefault = !b.lastMessageText || b.lastMessageText === 'Started conversation';
+        if (aDefault !== bDefault) return aDefault ? 1 : -1;
+        const timeA = new Date(a.lastMessageTime || a.updatedAt || 0).getTime();
+        const timeB = new Date(b.lastMessageTime || b.updatedAt || 0).getTime();
+        return timeB - timeA;
+      });
+
+      const primary = matchedDocs[0];
+      const allConvIds = Array.from(new Set([directId, ...matchedDocs.map((m) => m.id)]));
+      const allParticipantIds = Array.from(
+        new Set([
+          currentUser.uid,
+          otherUser.uid,
+          ...matchedDocs.flatMap((m) => m.participantIds || [])
+        ])
+      );
+
+      const combinedPData: Record<string, any> = {};
+      matchedDocs.forEach((m) => {
+        Object.assign(combinedPData, extractNormalizedParticipantData(m));
+      });
+      Object.assign(combinedPData, safeParticipantData);
+
+      const unifiedConv: Conversation = {
+        ...primary,
+        id: primary.id,
+        type: 'direct',
+        title: otherCleanName,
+        avatar: otherUser.photoURL || primary.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${otherUser.uid}`,
+        participantIds: allParticipantIds,
+        participantEmails,
+        participantNames,
+        mergedConversationIds: allConvIds,
+        participantData: combinedPData,
+        updatedAt: nowIso
+      };
+
+      // Update all matched conversation docs in background so both users' sidebars stay 100% synced
+      Promise.allSettled(
+        allConvIds.map((cid) =>
+          setDoc(
+            doc(db, 'conversations', cid),
+            {
+              ...unifiedConv,
+              id: cid
+            },
+            { merge: true }
+          )
+        )
+      ).catch(() => {});
+
+      return unifiedConv;
     }
 
     const newConv: Conversation = {
       id: directId,
       type: 'direct',
-      title: otherUser.displayName || 'Friend',
+      title: otherCleanName,
       avatar: otherUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${otherUser.uid}`,
       participantIds: [currentUser.uid, otherUser.uid],
+      participantEmails,
+      participantNames,
+      mergedConversationIds: [directId],
       participantData: safeParticipantData,
       lastMessageText: 'Started conversation',
-      lastMessageSender: currentUser.displayName || 'User',
-      lastMessageTime: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      createdAt: new Date().toISOString()
+      lastMessageSender: myCleanName,
+      lastMessageTime: nowIso,
+      updatedAt: nowIso,
+      createdAt: nowIso
     };
 
     await setDoc(convRef, newConv, { merge: true });
@@ -1216,13 +1469,14 @@ export async function getOrCreateDirectConversation(
       id: initMsgId,
       conversationId: directId,
       senderId: currentUser.uid,
-      senderName: currentUser.displayName || 'User',
+      senderName: myCleanName,
+      senderEmail: currentUser.email || '',
       senderPhoto: currentUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${currentUser.uid}`,
       text: `👋 Started a direct chat on ipin Messenger!`,
       mediaType: 'none',
       reactions: {},
       readBy: [currentUser.uid],
-      createdAt: new Date().toISOString()
+      createdAt: nowIso
     });
 
     return newConv;
@@ -1231,13 +1485,16 @@ export async function getOrCreateDirectConversation(
     return {
       id: directId,
       type: 'direct',
-      title: otherUser.displayName || 'Friend',
+      title: otherCleanName,
       avatar: otherUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${otherUser.uid}`,
       participantIds: [currentUser.uid, otherUser.uid],
+      participantEmails,
+      participantNames,
+      mergedConversationIds: [directId],
       participantData: safeParticipantData,
       lastMessageText: 'Direct conversation',
-      lastMessageTime: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      lastMessageTime: nowIso,
+      updatedAt: nowIso
     };
   }
 }
