@@ -39,6 +39,7 @@ export const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
     user,
     isDemoMode,
     updateProfileData,
+    updateUserStatus,
     signOutUser,
     resetPassword,
     switchDemoUser,
@@ -55,7 +56,7 @@ export const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
     profile?.bannerType || (isYouTubeUrl(profile?.bannerURL) ? 'youtube' : 'image')
   );
   const [photoURL, setPhotoURL] = useState(profile?.photoURL || '');
-  const [status, setStatus] = useState<'online' | 'away' | 'offline'>(profile?.status || 'online');
+  const [status, setStatus] = useState<'online' | 'busy' | 'offline' | 'away'>(profile?.status || 'online');
   const [feedback, setFeedback] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -250,13 +251,13 @@ export const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
                 </button>
               )}
 
-              {/* Status Indicator */}
+              {/* Status Indicator: Online = Green, Busy/Do Not Disturb = Red, Offline = Gray */}
               <div
                 className={`absolute bottom-1 right-1 w-5 h-5 rounded-full ring-2 ring-white dark:ring-zinc-900 ${
                   profile.status === 'online'
                     ? 'bg-emerald-500'
-                    : profile.status === 'away'
-                    ? 'bg-amber-500'
+                    : profile.status === 'busy' || profile.status === 'away'
+                    ? 'bg-red-500'
                     : 'bg-zinc-400'
                 }`}
               />
@@ -312,6 +313,60 @@ export const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
               <p className="text-sm text-zinc-700 dark:text-zinc-300 mt-3 leading-relaxed">
                 {profile.bio || 'Exploring the world through ipin Messenger.'}
               </p>
+
+              {/* Instant Real-Time Status Switcher (Online = Green, Busy/DND = Red, Offline = Gray) */}
+              <div className="mt-4 p-3 rounded-2xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700/60 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider">
+                    Real-Time Status
+                  </span>
+                  <span className="text-[10px] font-semibold text-zinc-500">
+                    {profile.status === 'busy' || profile.status === 'away'
+                      ? '🔴 Busy (Do Not Disturb)'
+                      : profile.status === 'offline'
+                      ? '⚫ Offline'
+                      : '🟢 Online'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => updateUserStatus('online')}
+                    className={`py-1.5 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      profile.status === 'online' || !profile.status
+                        ? 'bg-emerald-600 text-white shadow-sm'
+                        : 'bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/30'
+                    }`}
+                  >
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 ring-1 ring-white/50" />
+                    <span>Online</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateUserStatus('busy')}
+                    className={`py-1.5 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      profile.status === 'busy' || profile.status === 'away'
+                        ? 'bg-red-600 text-white shadow-sm'
+                        : 'bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700 hover:bg-red-50 dark:hover:bg-red-950/30'
+                    }`}
+                  >
+                    <span className="w-2 h-2 rounded-full bg-red-500 ring-1 ring-white/50" />
+                    <span>Busy</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateUserStatus('offline')}
+                    className={`py-1.5 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      profile.status === 'offline'
+                        ? 'bg-zinc-700 text-white shadow-sm'
+                        : 'bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800'
+                    }`}
+                  >
+                    <span className="w-2 h-2 rounded-full bg-zinc-400 ring-1 ring-white/50" />
+                    <span>Offline</span>
+                  </button>
+                </div>
+              </div>
 
               {/* Current Note */}
               {profile.note && (
@@ -470,13 +525,13 @@ export const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
                   Status
                 </label>
                 <select
-                  value={status}
+                  value={status === 'away' ? 'busy' : status}
                   onChange={(e) => setStatus(e.target.value as any)}
                   className="w-full px-3 py-2 text-xs rounded-xl bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-900 dark:text-zinc-100"
                 >
-                  <option value="online">🟢 Active / Online</option>
-                  <option value="away">🟡 Away</option>
-                  <option value="offline">⚫️ Offline</option>
+                  <option value="online">🟢 Online (Green)</option>
+                  <option value="busy">🔴 Busy / Do Not Disturb (Red)</option>
+                  <option value="offline">⚫️ Offline (Gray)</option>
                 </select>
               </div>
 

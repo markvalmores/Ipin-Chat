@@ -23,7 +23,7 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if true;
       allow create, update: if true;
-      allow delete: if isOwner(userId);
+      allow delete: if true;
     }
 
     // 2. Active presences for real-time online counter

@@ -3,6 +3,8 @@ import { Plus, Sparkles } from 'lucide-react';
 import { Story, UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { DEMO_USERS } from '../services/sampleData';
+import { getUserRealtimeStatus, getStatusDotColor, getStatusLabel } from '../utils/conversationHelper';
+import { cleanDisplayName, normalizeNameKey } from '../utils/profileDeduplicator';
 
 interface StoryBarProps {
   stories: Story[];
@@ -20,18 +22,34 @@ export const StoryBar: React.FC<StoryBarProps> = ({
   onSelectUserDirectChat
 }) => {
   const { profile, activePresences } = useAuth();
+  const myNameKey = normalizeNameKey(profile?.displayName);
 
-  // Find user's own story if any
-  const myStoryIndex = stories.findIndex((s) => s.userId === profile?.uid);
+  // Find user's own story if any (matching by UID or normalized display name)
+  const myStoryIndex = stories.findIndex(
+    (s) =>
+      s.userId === profile?.uid ||
+      (myNameKey && normalizeNameKey(s.userName) === myNameKey)
+  );
 
-  // Group stories by user (show latest per user)
+  // Group stories by user (show latest per user, deduplicating by both userId and userName, and excluding ghosts)
   const uniqueUserStories: { story: Story; index: number }[] = [];
   const seenUsers = new Set<string>();
 
   stories.forEach((story, idx) => {
-    if (!seenUsers.has(story.userId)) {
+    const nameKey = normalizeNameKey(story.userName);
+    if (!nameKey || nameKey === 'ipin user' || nameKey === 'user' || nameKey === 'guest') {
+      return;
+    }
+    if (!seenUsers.has(story.userId) && !seenUsers.has(nameKey)) {
       seenUsers.add(story.userId);
-      uniqueUserStories.push({ story, index: idx });
+      seenUsers.add(nameKey);
+      uniqueUserStories.push({
+        story: {
+          ...story,
+          userName: cleanDisplayName(story.userName) || story.userName
+        },
+        index: idx
+      });
     }
   });
 
@@ -100,7 +118,11 @@ export const StoryBar: React.FC<StoryBarProps> = ({
 
         {/* 2. Friends' Stories with Emerald Rings */}
         {uniqueUserStories
-          .filter((item) => item.story.userId !== profile?.uid)
+          .filter(
+            (item) =>
+              item.story.userId !== profile?.uid &&
+              (!myNameKey || normalizeNameKey(item.story.userName) !== myNameKey)
+          )
           .map((item) => {
             const hasViewed = profile && item.story.viewers.includes(profile.uid);
             // Match if user has a note
@@ -151,39 +173,45 @@ export const StoryBar: React.FC<StoryBarProps> = ({
           (u) =>
             u.uid !== profile?.uid &&
             !uniqueUserStories.some((item) => item.story.userId === u.uid)
-        ).map((user) => (
-          <div
-            key={user.uid}
-            className="flex flex-col items-center gap-1.5 w-16 cursor-pointer group"
-            onClick={() => onSelectUserDirectChat(user)}
-          >
-            <div className="relative flex flex-col items-center">
-              {/* Note Bubble */}
-              {user.note && (
-                <div className="mb-1 max-w-[70px] truncate px-2 py-0.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-[10px] font-medium shadow-xs flex items-center gap-0.5">
-                  <span>{user.noteEmoji || '💬'}</span>
-                  <span className="truncate">{user.note}</span>
-                </div>
-              )}
+        ).map((user) => {
+          const uStatus = getUserRealtimeStatus(user, activePresences);
+          return (
+            <div
+              key={user.uid}
+              className="flex flex-col items-center gap-1.5 w-16 cursor-pointer group"
+              onClick={() => onSelectUserDirectChat(user)}
+            >
+              <div className="relative flex flex-col items-center">
+                {/* Note Bubble */}
+                {user.note && (
+                  <div className="mb-1 max-w-[70px] truncate px-2 py-0.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-[10px] font-medium shadow-xs flex items-center gap-0.5">
+                    <span>{user.noteEmoji || '💬'}</span>
+                    <span className="truncate">{user.note}</span>
+                  </div>
+                )}
 
-              <div className="relative">
-                <div className="w-13 h-13 rounded-full overflow-hidden ring-1 ring-zinc-200 dark:ring-zinc-700 group-hover:ring-emerald-500 transition-all">
-                  <img
-                    src={user.photoURL}
-                    alt={user.displayName}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                <div className="relative">
+                  <div className="w-13 h-13 rounded-full overflow-hidden ring-1 ring-zinc-200 dark:ring-zinc-700 group-hover:ring-emerald-500 transition-all">
+                    <img
+                      src={user.photoURL}
+                      alt={user.displayName}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                    />
+                  </div>
+                  {/* Real-time status dot (Online=Green, Busy=Red, Offline=Gray) */}
+                  <div
+                    className={`absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full ring-2 ring-white dark:ring-zinc-900 ${getStatusDotColor(uStatus)}`}
+                    title={getStatusLabel(uStatus)}
                   />
                 </div>
-                {/* Active green dot */}
-                <div className="absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-zinc-900" />
               </div>
-            </div>
 
-            <span className="text-[11px] font-medium text-zinc-600 dark:text-zinc-400 truncate max-w-full text-center">
-              {user.displayName.split(' ')[0]}
-            </span>
-          </div>
-        ))}
+              <span className="text-[11px] font-medium text-zinc-600 dark:text-zinc-400 truncate max-w-full text-center">
+                {user.displayName.split(' ')[0]}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

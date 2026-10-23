@@ -19,6 +19,7 @@ import { useAuth } from '../context/AuthContext';
 import { createGroupChat } from '../services/chatService';
 import { DEMO_USERS } from '../services/sampleData';
 import { compressImageForUpload } from '../utils/mediaStore';
+import { deduplicateUserProfiles } from '../utils/profileDeduplicator';
 
 interface CreateGroupChatModalProps {
   isOpen: boolean;
@@ -63,16 +64,11 @@ export const CreateGroupChatModal: React.FC<CreateGroupChatModalProps> = ({
   const [copiedLink, setCopiedLink] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Pool all available users (demo users + registered users, excluding self)
-  const availableUsers: UserProfile[] = [];
-  const seenIds = new Set<string>();
-
-  [...registeredUsers, ...DEMO_USERS].forEach((u) => {
-    if (u.uid !== profile?.uid && !seenIds.has(u.uid)) {
-      seenIds.add(u.uid);
-      availableUsers.push(u);
-    }
-  });
+  // Pool and deduplicate all available users (demo users + registered users, excluding self & ghosts)
+  const { otherUsers: availableUsers } = deduplicateUserProfiles(
+    [...registeredUsers, ...DEMO_USERS],
+    profile
+  );
 
   // Filtered members by search
   const filteredUsers = availableUsers.filter((u) => {

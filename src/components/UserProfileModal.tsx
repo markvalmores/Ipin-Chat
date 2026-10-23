@@ -25,6 +25,7 @@ interface UserProfileModalProps {
   user: UserProfile | null;
   isOpen: boolean;
   isOnline: boolean;
+  userStatus?: 'online' | 'busy' | 'offline';
   onClose: () => void;
   onStartChat: (user: UserProfile) => void;
   onRemoveFromGroup?: (user: UserProfile) => void;
@@ -35,6 +36,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   user,
   isOpen,
   isOnline,
+  userStatus,
   onClose,
   onStartChat,
   onRemoveFromGroup,
@@ -43,6 +45,14 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   const [activeCallType, setActiveCallType] = useState<CallType | null>(null);
 
   if (!isOpen || !user) return null;
+
+  const effectiveStatus: 'online' | 'busy' | 'offline' =
+    userStatus ||
+    (user.status === 'busy' || user.status === 'away'
+      ? 'busy'
+      : isOnline
+      ? 'online'
+      : 'offline');
 
   const isYouTubeBanner = isYouTubeUrl(user.bannerURL) || user.bannerType === 'youtube';
   const isMp4Banner = user.bannerType === 'video' || user.bannerURL?.endsWith('.mp4');
@@ -84,7 +94,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
 
         {/* Content body with negative margin avatar */}
         <div className="p-6 pt-0 relative flex-1 overflow-y-auto">
-          {/* Avatar and Online/Offline Status Indicator */}
+          {/* Avatar and Online / Busy / Offline Status Indicator */}
           <div className="flex justify-between items-end -mt-12 mb-4">
             <div className="relative">
               <div className="w-24 h-24 rounded-3xl overflow-hidden ring-4 ring-white dark:ring-zinc-900 shadow-xl bg-zinc-200 dark:bg-zinc-800">
@@ -96,25 +106,41 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
               </div>
               <span
                 className={`absolute bottom-1 right-1 w-5 h-5 rounded-full ring-3 ring-white dark:ring-zinc-900 flex items-center justify-center ${
-                  isOnline ? 'bg-emerald-500' : 'bg-zinc-400'
+                  effectiveStatus === 'online'
+                    ? 'bg-emerald-500'
+                    : effectiveStatus === 'busy'
+                    ? 'bg-red-500'
+                    : 'bg-zinc-400'
                 }`}
-                title={isOnline ? 'Online now' : 'Offline'}
+                title={
+                  effectiveStatus === 'online'
+                    ? 'Online now'
+                    : effectiveStatus === 'busy'
+                    ? 'Busy (Do Not Disturb)'
+                    : 'Offline'
+                }
               >
-                {isOnline && <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />}
+                {effectiveStatus === 'online' && <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />}
+                {effectiveStatus === 'busy' && <span className="w-2 h-0.5 rounded-full bg-white" />}
               </span>
             </div>
 
-            {/* Online / Offline Status Badge */}
+            {/* Online / Busy / Offline Status Badge */}
             <div className="mb-2">
-              {isOnline ? (
+              {effectiveStatus === 'online' ? (
                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 text-xs font-bold border border-emerald-500/30">
                   <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
                   <span>Online / Active Now</span>
                 </span>
+              ) : effectiveStatus === 'busy' ? (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-100 dark:bg-red-950/80 text-red-700 dark:text-red-300 text-xs font-bold border border-red-500/30">
+                  <span className="w-2 h-2 rounded-full bg-red-500" />
+                  <span>Busy • Do Not Disturb</span>
+                </span>
               ) : (
                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 text-xs font-semibold border border-zinc-200 dark:border-zinc-700">
                   <span className="w-2 h-2 rounded-full bg-zinc-400" />
-                  <span>Offline {user.lastSeen ? `• ${user.lastSeen}` : ''}</span>
+                  <span>Offline {user.lastSeen && user.lastSeen !== 'Active now' ? `• ${user.lastSeen}` : ''}</span>
                 </span>
               )}
             </div>

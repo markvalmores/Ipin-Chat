@@ -17,7 +17,7 @@ import { useAuth } from '../context/AuthContext';
 import { searchUsersByName, subscribeToAllUsers } from '../services/chatService';
 import { BannerMedia } from './BannerMedia';
 import { isYouTubeUrl } from '../utils/youtube';
-import { isUserOnline } from '../utils/conversationHelper';
+import { getUserRealtimeStatus, getStatusDotColor, getStatusLabel } from '../utils/conversationHelper';
 
 interface SearchAccountsModalProps {
   isOpen: boolean;
@@ -142,7 +142,7 @@ export const SearchAccountsModal: React.FC<SearchAccountsModalProps> = ({
             </div>
           ) : (
             results.map((user) => {
-              const isOnline = isUserOnline(user, activePresences, allUsers);
+              const userStatus = getUserRealtimeStatus(user, activePresences, allUsers);
 
               return (
                 <div
@@ -162,7 +162,7 @@ export const SearchAccountsModal: React.FC<SearchAccountsModalProps> = ({
 
                   <div className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="flex items-start gap-3 min-w-0">
-                      {/* Avatar with online status */}
+                      {/* Avatar with real-time status (Online=Green, Busy=Red, Offline=Gray) */}
                       <div className="relative shrink-0">
                         <div className="w-12 h-12 rounded-2xl overflow-hidden ring-1 ring-zinc-200 dark:ring-zinc-700 bg-zinc-200">
                           <img
@@ -172,9 +172,8 @@ export const SearchAccountsModal: React.FC<SearchAccountsModalProps> = ({
                           />
                         </div>
                         <span
-                          className={`absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full ring-2 ring-white dark:ring-zinc-900 ${
-                            isOnline ? 'bg-emerald-500' : 'bg-zinc-400'
-                          }`}
+                          className={`absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full ring-2 ring-white dark:ring-zinc-900 ${getStatusDotColor(userStatus)}`}
+                          title={getStatusLabel(userStatus)}
                         />
                       </div>
 
@@ -183,12 +182,18 @@ export const SearchAccountsModal: React.FC<SearchAccountsModalProps> = ({
                         <h4 className="text-sm font-bold text-zinc-900 dark:text-zinc-100 truncate">
                           {user.displayName}
                         </h4>
-                        {isOnline ? (
+                        {userStatus === 'online' ? (
                           <span className="px-1.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[10px] font-semibold">
-                            🟢 Active
+                            🟢 Online
+                          </span>
+                        ) : userStatus === 'busy' ? (
+                          <span className="px-1.5 py-0.5 rounded-full bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300 text-[10px] font-semibold">
+                            🔴 Busy (Do Not Disturb)
                           </span>
                         ) : (
-                          <span className="text-[10px] text-zinc-400">Offline</span>
+                          <span className="px-1.5 py-0.5 rounded-full bg-zinc-200/70 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 text-[10px] font-semibold">
+                            ⚫ Offline
+                          </span>
                         )}
                       </div>
 

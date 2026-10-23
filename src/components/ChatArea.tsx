@@ -34,7 +34,7 @@ import {
   getConversationWallpaper,
   ChatWallpaperSettings
 } from '../services/chatService';
-import { getConversationDisplay, isUserOnline } from '../utils/conversationHelper';
+import { getConversationDisplay, isUserOnline, getUserRealtimeStatus, getStatusDotColor, getStatusLabel } from '../utils/conversationHelper';
 import { DEMO_USERS } from '../services/sampleData';
 import { MessageItem } from './MessageItem';
 import { MessageInput } from './MessageInput';
@@ -227,17 +227,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   const displayInfo = getConversationDisplay(conversation, profile?.uid, allUsers);
   const otherUser = displayInfo.otherUser;
-  const hasRecentMessageFromOther = otherUser
-    ? messages.some(
-        (m) =>
-          (m.senderId === otherUser.uid ||
-            (m.senderName || '').trim().toLowerCase() === (otherUser.displayName || '').trim().toLowerCase()) &&
-          Math.abs(Date.now() - new Date(m.createdAt).getTime()) < 15 * 60 * 1000
-      )
-    : false;
-  const isOtherUserOnline = otherUser
-    ? isUserOnline(otherUser, activePresences, allUsers) || hasRecentMessageFromOther
-    : true;
+  const otherUserStatus = otherUser
+    ? getUserRealtimeStatus(otherUser, activePresences, allUsers)
+    : 'online';
+  const isOtherUserOnline = otherUserStatus === 'online' || otherUserStatus === 'busy';
 
   const handleOpenHeaderProfile = () => {
     if (otherUser) {
@@ -339,7 +332,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </button>
           )}
 
-          {/* Avatar with online pulse */}
+          {/* Avatar with real-time status dot (Green = Online, Red = Busy/DND, Gray = Offline) */}
           <div className="relative shrink-0">
             <div className="w-10 h-10 rounded-2xl overflow-hidden ring-1 ring-zinc-200 dark:ring-zinc-800 group-hover:ring-2 group-hover:ring-emerald-500 transition-all">
               <img
@@ -349,9 +342,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               />
             </div>
             <span
-              className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full ring-2 ring-white dark:ring-zinc-900 ${
-                isOtherUserOnline ? 'bg-emerald-500' : 'bg-zinc-400'
-              }`}
+              className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full ring-2 ring-white dark:ring-zinc-900 ${getStatusDotColor(otherUserStatus)}`}
+              title={getStatusLabel(otherUserStatus)}
             />
           </div>
 
@@ -386,14 +378,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     </>
                   )}
                 </>
-              ) : isOtherUserOnline ? (
+              ) : otherUserStatus === 'online' ? (
                 <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  Active Now
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                  Online
+                </span>
+              ) : otherUserStatus === 'busy' ? (
+                <span className="flex items-center gap-1 text-red-500 dark:text-red-400 font-semibold">
+                  <span className="w-2 h-2 rounded-full bg-red-500" />
+                  Busy (Do Not Disturb)
                 </span>
               ) : (
                 <span className="flex items-center gap-1 text-zinc-400 font-medium">
-                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400" />
+                  <span className="w-2 h-2 rounded-full bg-zinc-400" />
                   Offline
                 </span>
               )}
@@ -765,6 +762,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         isOpen={isProfileModalOpen}
         isOnline={
           inspectedUser ? isUserOnline(inspectedUser, activePresences, allUsers) : false
+        }
+        userStatus={
+          inspectedUser ? getUserRealtimeStatus(inspectedUser, activePresences, allUsers) : 'offline'
         }
         onClose={() => setIsProfileModalOpen(false)}
         onStartChat={(u) => {

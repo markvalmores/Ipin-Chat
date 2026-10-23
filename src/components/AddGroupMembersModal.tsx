@@ -13,6 +13,7 @@ import { Conversation, UserProfile } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { DEMO_USERS } from '../services/sampleData';
 import { addMembersToGroupChat } from '../services/chatService';
+import { deduplicateUserProfiles } from '../utils/profileDeduplicator';
 
 interface AddGroupMembersModalProps {
   isOpen: boolean;
@@ -37,21 +38,14 @@ export const AddGroupMembersModal: React.FC<AddGroupMembersModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Pool all available users (demo users + registered users)
-  const allUsersMap = new Map<string, UserProfile>();
-  DEMO_USERS.forEach((u) => allUsersMap.set(u.uid, u));
-  registeredUsers.forEach((u) => allUsersMap.set(u.uid, u));
-
   // Current participant UIDs in this conversation
   const existingParticipantIds = new Set(conversation.participantIds || []);
 
-  // Filter out the current user, get a unique list of candidates
-  const candidateUsers: UserProfile[] = [];
-  allUsersMap.forEach((u) => {
-    if (u.uid !== profile?.uid) {
-      candidateUsers.push(u);
-    }
-  });
+  // Deduplicate all available users (demo users + registered users) to 1 canonical profile per original email
+  const { otherUsers: candidateUsers } = deduplicateUserProfiles(
+    [...DEMO_USERS, ...registeredUsers],
+    profile
+  );
 
   // Filter candidate users by search query
   const filteredUsers = candidateUsers.filter((u) => {

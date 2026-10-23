@@ -20,7 +20,8 @@ import { useAuth } from '../context/AuthContext';
 import { DEMO_USERS } from '../services/sampleData';
 import { addMembersToGroupChat, removeMemberFromGroupChat } from '../services/chatService';
 import { AddGroupMembersModal } from './AddGroupMembersModal';
-import { isUserOnline } from '../utils/conversationHelper';
+import { getUserRealtimeStatus, getStatusDotColor, getStatusLabel } from '../utils/conversationHelper';
+import { deduplicateUserProfiles, isGhostProfile, normalizeEmailKey, normalizeNameKey } from '../utils/profileDeduplicator';
 
 interface ChannelMembersDrawerProps {
   conversation: Conversation;
@@ -49,26 +50,39 @@ export const ChannelMembersDrawer: React.FC<ChannelMembersDrawerProps> = ({
 
   if (!isOpen) return null;
 
-  // Pool all users
-  const allUsersMap = new Map<string, UserProfile>();
-  DEMO_USERS.forEach((u) => allUsersMap.set(u.uid, u));
-  registeredUsers.forEach((u) => allUsersMap.set(u.uid, u));
-  if (profile) allUsersMap.set(profile.uid, profile);
+  // Pool and deduplicate all users so 1 person = 1 canonical profile with original email
+  const rawPool: UserProfile[] = [...DEMO_USERS, ...registeredUsers];
+  if (profile) rawPool.push(profile);
+  const { allCanonicalUsers, uidRedirectMap } = deduplicateUserProfiles(rawPool, profile);
 
-  // Group members into roles
-  const creatorId = conversation.creatorId || conversation.participantIds[0];
+  const allUsersMap = new Map<string, UserProfile>();
+  allCanonicalUsers.forEach((u) => allUsersMap.set(u.uid, u));
+
+  // Group members into roles without any duplicate or ghost profiles
+  const rawCreatorId = conversation.creatorId || conversation.participantIds[0];
+  const creatorId = (rawCreatorId && uidRedirectMap.get(rawCreatorId)) || rawCreatorId;
   const participantIds = conversation.participantIds || [];
 
-  const members: (UserProfile & { isCreator: boolean; isOnline: boolean })[] = [];
+  const members: (UserProfile & { isCreator: boolean; isOnline: boolean; realtimeStatus: 'online' | 'busy' | 'offline' })[] = [];
+  const seenKeys = new Set<string>();
 
-  participantIds.forEach((uid) => {
-    const user = allUsersMap.get(uid);
-    if (user) {
-      const isOnline = isUserOnline(user, activePresences, registeredUsers);
+  participantIds.forEach((rawUid) => {
+    const canonicalUid = uidRedirectMap.get(rawUid) || rawUid;
+    const user = allUsersMap.get(canonicalUid);
+    if (user && !isGhostProfile(user)) {
+      const emailKey = normalizeEmailKey(user.email);
+      const nameKey = normalizeNameKey(user.displayName);
+      const dedupKey = emailKey || nameKey || user.uid;
+      if (seenKeys.has(dedupKey) || seenKeys.has(user.uid)) return;
+      seenKeys.add(dedupKey);
+      seenKeys.add(user.uid);
+
+      const rStatus = getUserRealtimeStatus(user, activePresences, allCanonicalUsers);
       members.push({
         ...user,
-        isCreator: uid === creatorId,
-        isOnline: isOnline || uid === profile?.uid
+        isCreator: user.uid === creatorId || rawUid === rawCreatorId,
+        isOnline: rStatus === 'online' || rStatus === 'busy',
+        realtimeStatus: rStatus
       });
     }
   });
@@ -197,7 +211,10 @@ export const ChannelMembersDrawer: React.FC<ChannelMembersDrawerProps> = ({
                         alt={u.displayName}
                         className="w-full h-full object-cover"
                       />
-                      <span className="absolute bottom-0 right-0 w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-zinc-900" />
+                      <span
+                        className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-2 ring-white dark:ring-zinc-900 ${getStatusDotColor(u.realtimeStatus)}`}
+                        title={getStatusLabel(u.realtimeStatus)}
+                      />
                     </div>
                     <div className="min-w-0">
                       <div className="flex items-center gap-1">
@@ -206,7 +223,9 @@ export const ChannelMembersDrawer: React.FC<ChannelMembersDrawerProps> = ({
                         </span>
                         <Crown size={11} className="text-amber-500 shrink-0" />
                       </div>
-                      <span className="text-[10px] text-zinc-400 truncate block">{u.location || 'Member'}</span>
+                      <span className="text-[10px] text-zinc-400 truncate block">
+                        {getStatusLabel(u.realtimeStatus)} • {u.location || 'Member'}
+                      </span>
                     </div>
                   </div>
 
@@ -277,13 +296,18 @@ export const ChannelMembersDrawer: React.FC<ChannelMembersDrawerProps> = ({
                         alt={u.displayName}
                         className="w-full h-full object-cover"
                       />
-                      <span className="absolute bottom-0 right-0 w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-zinc-900" />
+                      <span
+                        className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-2 ring-white dark:ring-zinc-900 ${getStatusDotColor(u.realtimeStatus)}`}
+                        title={getStatusLabel(u.realtimeStatus)}
+                      />
                     </div>
                     <div className="min-w-0">
                       <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 truncate block">
                         {u.displayName}
                       </span>
-                      <span className="text-[10px] text-zinc-400 truncate block">{u.location || 'Active'}</span>
+                      <span className="text-[10px] text-zinc-400 truncate block">
+                        {getStatusLabel(u.realtimeStatus)} • {u.location || 'Active'}
+                      </span>
                     </div>
                   </div>
 
@@ -348,18 +372,22 @@ export const ChannelMembersDrawer: React.FC<ChannelMembersDrawerProps> = ({
                   onClick={() => onInspectUser(u)}
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="relative w-8 h-8 rounded-full overflow-hidden grayscale shrink-0">
+                    <div className="relative w-8 h-8 rounded-full shrink-0">
                       <img
                         src={u.photoURL || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'}
                         alt={u.displayName}
-                        className="w-full h-full object-cover"
+                        className="w-full h-full rounded-full object-cover grayscale"
+                      />
+                      <span
+                        className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-zinc-400 ring-2 ring-white dark:ring-zinc-900"
+                        title="Offline"
                       />
                     </div>
                     <div className="min-w-0">
                       <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300 truncate block">
                         {u.displayName}
                       </span>
-                      <span className="text-[10px] text-zinc-400 truncate block">{u.location || 'Offline'}</span>
+                      <span className="text-[10px] text-zinc-400 truncate block">Offline • {u.location || 'Member'}</span>
                     </div>
                   </div>
 

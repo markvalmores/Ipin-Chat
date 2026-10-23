@@ -140,14 +140,14 @@ export const DEMO_USERS: UserProfile[] = [
     photoURL: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
     bannerURL: 'https://images.unsplash.com/photo-1513635269975-59663e0ac1ad?w=800&auto=format&fit=crop&q=80',
     bannerType: 'image',
-    status: 'away',
+    status: 'busy',
     note: 'Learning Mandarin tones! 🇨🇳 📚',
     noteEmoji: '📖',
     noteUpdatedAt: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
     location: 'London, UK 🇬🇧',
     bio: 'Linguistics student exploring international communication tools.',
     createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 40).toISOString(),
-    lastSeen: '12m ago'
+    lastSeen: 'Busy (Do Not Disturb)'
   }
 ];
 

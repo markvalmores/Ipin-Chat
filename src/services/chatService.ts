@@ -20,6 +20,12 @@ import { Conversation, Message, Story, UserProfile } from '../types';
 import { INITIAL_CHANNEL_MESSAGES, INITIAL_PUBLIC_CHANNELS, INITIAL_STORIES, DEMO_USERS } from './sampleData';
 import { generateXiaoAiReply, AI_PERSONA } from './aiPersonaService';
 import { storeMediaBlob } from '../utils/mediaStore';
+import {
+  cleanDisplayName,
+  deduplicateConversationsList,
+  deduplicateUserProfiles,
+  normalizeNameKey
+} from '../utils/profileDeduplicator';
 
 // Send a new message
 export async function sendMessage(
@@ -421,17 +427,17 @@ export function subscribeToConversations(
   currentUserName?: string
 ) {
   const convsRef = collection(db, 'conversations');
-  const lowerCurrentName = (currentUserName || '').trim().toLowerCase();
+  const lowerCurrentName = normalizeNameKey(currentUserName);
 
   const isUserParticipant = (c: Conversation): boolean => {
     if (c.type === 'group') return true;
     if (c.participantIds && c.participantIds.includes(currentUserId)) return true;
     if (c.id && c.id.includes(currentUserId)) return true;
     if (lowerCurrentName && lowerCurrentName !== 'user' && lowerCurrentName !== 'ipin user') {
-      if ((c.title || '').trim().toLowerCase() === lowerCurrentName) return true;
+      if (normalizeNameKey(c.title) === lowerCurrentName) return true;
       if (c.participantData) {
         const matchedByName = Object.values(c.participantData).some(
-          (p) => (p?.displayName || '').trim().toLowerCase() === lowerCurrentName
+          (p) => normalizeNameKey(p?.displayName) === lowerCurrentName
         );
         if (matchedByName) return true;
       }
@@ -460,12 +466,12 @@ export function subscribeToConversations(
       }
     });
 
-    const merged = Array.from(map.values());
-    merged.sort((a, b) => {
-      const timeA = new Date(a.lastMessageTime || a.updatedAt || 0).getTime();
-      const timeB = new Date(b.lastMessageTime || b.updatedAt || 0).getTime();
-      return timeB - timeA;
-    });
+    const merged = deduplicateConversationsList(
+      Array.from(map.values()),
+      currentUserId,
+      [],
+      currentUserName
+    );
 
     onUpdate(merged);
   };
@@ -1236,7 +1242,7 @@ export async function getOrCreateDirectConversation(
   }
 }
 
-// Search users in Firestore by account name or email
+// Search users in Firestore by account name or email (deduplicated to 1 profile per original email, no ghost profiles)
 export async function searchUsersByName(queryText: string, currentUserId: string): Promise<UserProfile[]> {
   const q = queryText.toLowerCase().trim();
   const usersRef = collection(db, 'users');
@@ -1244,32 +1250,57 @@ export async function searchUsersByName(queryText: string, currentUserId: string
   try {
     const snapshot = await getDocs(usersRef);
     const firestoreUsers: UserProfile[] = [];
+    let currentUserObj: UserProfile | null = null;
 
     snapshot.forEach((docSnap) => {
-      const u = docSnap.data() as UserProfile;
-      if (u.uid !== currentUserId) {
-        firestoreUsers.push(u);
+      const data = docSnap.data() as UserProfile;
+      const u: UserProfile = {
+        ...data,
+        uid: data.uid || docSnap.id,
+        displayName: cleanDisplayName(data.displayName) || data.displayName
+      };
+      if (u.uid === currentUserId) {
+        currentUserObj = u;
       }
+      firestoreUsers.push(u);
     });
 
     // Merge with DEMO_USERS so test accounts are always discoverable
     const all = [...firestoreUsers];
     DEMO_USERS.forEach((demo) => {
-      if (demo.uid !== currentUserId && !all.some((u) => u.uid === demo.uid)) {
+      if (!all.some((u) => u.uid === demo.uid)) {
         all.push(demo);
       }
     });
+    if (!currentUserObj) {
+      currentUserObj = DEMO_USERS.find((d) => d.uid === currentUserId) || {
+        uid: currentUserId,
+        displayName: '',
+        email: ''
+      };
+    }
 
-    if (!q) return all;
+    const { otherUsers, duplicateUidsToDelete } = deduplicateUserProfiles(all, currentUserObj);
 
-    return all.filter((u) => {
+    if (duplicateUidsToDelete.length > 0) {
+      Promise.allSettled(
+        duplicateUidsToDelete.flatMap((ghostUid) => [
+          deleteDoc(doc(db, 'users', ghostUid)),
+          deleteDoc(doc(db, 'active_presences', ghostUid))
+        ])
+      ).catch(() => {});
+    }
+
+    if (!q) return otherUsers;
+
+    return otherUsers.filter((u) => {
       const name = (u.displayName || '').toLowerCase();
       const email = (u.email || '').toLowerCase();
       const location = (u.location || '').toLowerCase();
       return name.includes(q) || email.includes(q) || location.includes(q);
     });
   } catch (error) {
-    console.warn("Could not query users from Firestore, using local list:", error);
+    console.warn('Could not query users from Firestore, using local list:', error);
     return DEMO_USERS.filter((u) => {
       if (u.uid === currentUserId) return false;
       if (!q) return true;
@@ -1281,35 +1312,90 @@ export async function searchUsersByName(queryText: string, currentUserId: string
   }
 }
 
-// Real-time listener for all registered users in Firestore
+// Real-time listener for all registered users in Firestore (strictly 1 canonical profile per original email, zero ghost profiles)
 export function subscribeToAllUsers(
   currentUserId: string,
   onUpdate: (users: UserProfile[]) => void
 ) {
   const usersRef = collection(db, 'users');
 
-  const unsubscribe = onSnapshot(usersRef, (snapshot) => {
-    const list: UserProfile[] = [];
-    snapshot.forEach((docSnap) => {
-      const u = docSnap.data() as UserProfile;
-      if (u.uid !== currentUserId) {
-        list.push(u);
-      }
-    });
+  const unsubscribe = onSnapshot(
+    usersRef,
+    (snapshot) => {
+      const rawList: UserProfile[] = [];
+      let currentUserObj: UserProfile | null = null;
 
-    // Merge with demo users if not present
-    const combined = [...list];
-    DEMO_USERS.forEach((demo) => {
-      if (demo.uid !== currentUserId && !combined.some((u) => u.uid === demo.uid)) {
-        combined.push(demo);
-      }
-    });
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data() as UserProfile;
+        const u: UserProfile = {
+          ...data,
+          uid: data.uid || docSnap.id,
+          displayName: cleanDisplayName(data.displayName) || data.displayName
+        };
+        if (u.uid === currentUserId) {
+          currentUserObj = u;
+        }
+        rawList.push(u);
+      });
 
-    onUpdate(combined);
-  }, (error) => {
-    onUpdate(DEMO_USERS.filter((u) => u.uid !== currentUserId));
-  });
+      // Merge with demo users if not present
+      const combined = [...rawList];
+      DEMO_USERS.forEach((demo) => {
+        if (!combined.some((u) => u.uid === demo.uid)) {
+          combined.push(demo);
+        }
+      });
+
+      if (!currentUserObj) {
+        try {
+          const saved = localStorage.getItem('ipin_active_user');
+          if (saved) currentUserObj = JSON.parse(saved);
+        } catch (e) {}
+      }
+      if (!currentUserObj) {
+        currentUserObj = DEMO_USERS.find((d) => d.uid === currentUserId) || {
+          uid: currentUserId,
+          displayName: '',
+          email: ''
+        };
+      }
+
+      const { allCanonicalUsers, otherUsers, duplicateUidsToDelete } = deduplicateUserProfiles(
+        combined,
+        currentUserObj
+      );
+
+      // Sync merged canonical profiles and purge any duplicate/ghost profiles in Firestore
+      allCanonicalUsers.forEach((canonical) => {
+        if (canonical.uid.startsWith('demo_user_')) return;
+        const raw = rawList.find((r) => r.uid === canonical.uid);
+        if (
+          raw &&
+          (raw.email !== canonical.email ||
+            raw.displayName !== canonical.displayName ||
+            raw.photoURL !== canonical.photoURL)
+        ) {
+          setDoc(doc(db, 'users', canonical.uid), canonical, { merge: true }).catch(() => {});
+        }
+      });
+
+      if (duplicateUidsToDelete.length > 0) {
+        Promise.allSettled(
+          duplicateUidsToDelete.flatMap((ghostUid) => [
+            deleteDoc(doc(db, 'users', ghostUid)),
+            deleteDoc(doc(db, 'active_presences', ghostUid))
+          ])
+        ).catch(() => {});
+      }
+
+      onUpdate(otherUsers);
+    },
+    () => {
+      onUpdate(DEMO_USERS.filter((u) => u.uid !== currentUserId));
+    }
+  );
 
   return unsubscribe;
 }
+
 

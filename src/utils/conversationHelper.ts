@@ -1,54 +1,118 @@
 import { ActivePresence, Conversation, UserProfile } from '../types';
 import { DEMO_USERS } from '../services/sampleData';
 
+export type ResolvedRealtimeStatus = 'online' | 'busy' | 'offline';
+
 /**
- * Checks whether a user is currently online using activePresences (by UID, displayName, or email)
- * as well as live user document status in Firestore.
+ * Resolves a user's exact real-time status from Firebase `active_presences` and `users`:
+ * - 'online' -> Green (physically online and status is online)
+ * - 'busy'   -> Red / Do Not Disturb (user set status to busy/away while online, or demo user set to busy)
+ * - 'offline' -> Gray / Grey (user is physically offline / disconnected, or manually set status to offline)
+ */
+export function getUserRealtimeStatus(
+  targetUser?: UserProfile | null,
+  activePresences: ActivePresence[] = [],
+  allUsers: UserProfile[] = []
+): ResolvedRealtimeStatus {
+  if (!targetUser) return 'offline';
+  if (targetUser.uid.startsWith('ipin_ai')) return 'online';
+
+  const targetUid = targetUser.uid;
+  const targetName = (targetUser.displayName || '').trim().toLowerCase();
+  const targetEmail = (targetUser.email || '').trim().toLowerCase();
+
+  const matchesTarget = (uid?: string, name?: string, email?: string): boolean => {
+    if (uid && uid === targetUid) return true;
+    const cleanName = (name || '').trim().toLowerCase();
+    if (
+      targetName &&
+      cleanName &&
+      cleanName === targetName &&
+      targetName !== 'friend' &&
+      targetName !== 'ipin user' &&
+      targetName !== 'user'
+    ) {
+      return true;
+    }
+    const cleanEmail = (email || '').trim().toLowerCase();
+    if (targetEmail && cleanEmail && cleanEmail === targetEmail) {
+      return true;
+    }
+    return false;
+  };
+
+  // 1. Find live user document from Firestore `users` subscription
+  const liveUser = allUsers.find((u) => matchesTarget(u.uid, u.displayName, u.email));
+
+  // 2. Find live heartbeat from Firestore `active_presences` subscription
+  const activePresence = activePresences.find((p) =>
+    matchesTarget(p.uid, p.displayName, p.email)
+  );
+
+  // If user is in activePresences, they have an active real-time heartbeat
+  if (activePresence) {
+    if (activePresence.isOnline === false || activePresence.status === 'offline') {
+      return 'offline';
+    }
+    if (
+      activePresence.status === 'busy' ||
+      activePresence.status === 'away' ||
+      liveUser?.status === 'busy' ||
+      liveUser?.status === 'away'
+    ) {
+      return 'busy';
+    }
+    if (liveUser?.status === 'offline') {
+      return 'offline';
+    }
+    return 'online';
+  }
+
+  // If user is NOT in activePresences:
+  // For real accounts (not built-in static demo personas), absence of an active heartbeat means they are physically offline!
+  const isStaticDemo = targetUid.startsWith('demo_user_');
+  if (!isStaticDemo) {
+    return 'offline';
+  }
+
+  // For built-in demo personas, check their live Firestore user doc or fallback demo status
+  const demoStatus = liveUser?.status || targetUser.status || 'offline';
+  if (demoStatus === 'offline') return 'offline';
+  if (demoStatus === 'busy' || demoStatus === 'away') return 'busy';
+  return 'online';
+}
+
+/**
+ * Returns the Tailwind background color class for a status indicator dot:
+ * - 'online'  -> Green (bg-emerald-500)
+ * - 'busy'    -> Red / Do Not Disturb (bg-red-500)
+ * - 'offline' -> Gray / Grey (bg-zinc-400 dark:bg-zinc-500)
+ */
+export function getStatusDotColor(status: ResolvedRealtimeStatus | string | undefined): string {
+  if (status === 'online') return 'bg-emerald-500';
+  if (status === 'busy' || status === 'away') return 'bg-red-500';
+  return 'bg-zinc-400 dark:bg-zinc-500';
+}
+
+/**
+ * Returns human-readable status label
+ */
+export function getStatusLabel(status: ResolvedRealtimeStatus | string | undefined): string {
+  if (status === 'online') return 'Online';
+  if (status === 'busy' || status === 'away') return 'Busy • Do Not Disturb';
+  return 'Offline';
+}
+
+/**
+ * Checks whether a user is currently online (or busy/active, i.e., not offline).
  */
 export function isUserOnline(
   targetUser?: UserProfile | null,
   activePresences: ActivePresence[] = [],
   allUsers: UserProfile[] = []
 ): boolean {
-  if (!targetUser) return false;
-  if (targetUser.uid.startsWith('ipin_ai')) return true;
-
-  const targetUid = targetUser.uid;
-  const targetName = (targetUser.displayName || '').trim().toLowerCase();
-  const targetEmail = (targetUser.email || '').trim().toLowerCase();
-
-  // 1. Check activePresences by UID, displayName, or email
-  const inPresence = activePresences.some((p) => {
-    if (p.isOnline === false) return false;
-    if (p.uid === targetUid) return true;
-    const pName = (p.displayName || '').trim().toLowerCase();
-    if (targetName && pName && pName === targetName && targetName !== 'friend' && targetName !== 'ipin user') {
-      return true;
-    }
-    const pEmail = (p.email || '').trim().toLowerCase();
-    if (targetEmail && pEmail && pEmail === targetEmail) {
-      return true;
-    }
-    return false;
-  });
-
-  if (inPresence) return true;
-
-  // 2. Check allUsers live status from Firestore
-  const inUsersOnline = allUsers.some((u) => {
-    const sameId = u.uid === targetUid;
-    const uName = (u.displayName || '').trim().toLowerCase();
-    const sameName = targetName && uName && uName === targetName && targetName !== 'friend' && targetName !== 'ipin user';
-    const uEmail = (u.email || '').trim().toLowerCase();
-    const sameEmail = targetEmail && uEmail && uEmail === targetEmail;
-
-    if (!sameId && !sameName && !sameEmail) return false;
-    return u.status === 'online';
-  });
-
-  if (inUsersOnline) return true;
-
-  return targetUser.status === 'online';
+  const status = getUserRealtimeStatus(targetUser, activePresences, allUsers);
+  return status === 'online' || status === 'busy';
 }
 
 /**

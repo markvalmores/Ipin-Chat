@@ -1,3 +1,5 @@
+export type UserStatus = 'online' | 'busy' | 'offline' | 'away';
+
 export interface UserProfile {
   uid: string;
   displayName: string;
@@ -5,7 +7,7 @@ export interface UserProfile {
   photoURL?: string;
   bannerURL?: string;
   bannerType?: 'image' | 'video' | 'youtube';
-  status?: 'online' | 'offline' | 'away';
+  status?: UserStatus;
   note?: string;
   noteEmoji?: string;
   noteUpdatedAt?: string;
@@ -13,6 +15,7 @@ export interface UserProfile {
   bio?: string;
   createdAt?: string;
   lastSeen?: string;
+  lastActive?: string;
 }
 
 export interface ActivePresence {
@@ -21,7 +24,9 @@ export interface ActivePresence {
   email?: string;
   photoURL?: string;
   lastActive: string;
+  lastActiveMs?: number;
   isOnline: boolean;
+  status?: UserStatus;
 }
 
 export interface Conversation {

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
 import {
   User,
   onAuthStateChanged,
@@ -21,8 +21,18 @@ import {
   deleteDoc
 } from 'firebase/firestore';
 import { auth, db } from '../firebase';
-import { ActivePresence, UserProfile } from '../types';
+import { ActivePresence, UserProfile, UserStatus } from '../types';
 import { DEMO_USERS } from '../services/sampleData';
+import {
+  cleanDisplayName,
+  deduplicateActivePresences,
+  isGhostProfile,
+  isSyntheticEmail,
+  mergeDuplicateProfiles,
+  normalizeEmailKey,
+  normalizeNameKey,
+  purgeGhostAndDuplicateProfilesInFirestore
+} from '../utils/profileDeduplicator';
 
 interface AuthContextType {
   user: User | null;
@@ -38,6 +48,7 @@ interface AuthContextType {
   resetPassword: (email: string) => Promise<void>;
   signOutUser: () => Promise<void>;
   updateProfileData: (data: Partial<UserProfile>) => Promise<void>;
+  updateUserStatus: (newStatus: 'online' | 'busy' | 'offline') => Promise<void>;
   updateNote: (note: string, emoji: string) => Promise<void>;
   switchDemoUser: (demoUser: UserProfile) => void;
   isDemoMode: boolean;
@@ -45,6 +56,12 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+function normalizeUserStatus(s?: UserStatus): 'online' | 'busy' | 'offline' {
+  if (s === 'busy' || s === 'away') return 'busy';
+  if (s === 'offline') return 'offline';
+  return 'online';
+}
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
@@ -54,51 +71,227 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isDemoMode, setIsDemoMode] = useState(false);
 
+  // Track local reception timestamps for each user's heartbeat to handle both clock skew and physical disconnects
+  const heartbeatTrackerRef = useRef<Map<string, { lastActiveStr: string; receivedAtMs: number; rawDoc: ActivePresence }>>(
+    new Map()
+  );
+
+  // Helper to generate consistent user ID for an email when no profile exists yet
+  const getConsistentUid = (emailStr: string) => {
+    const clean = emailStr.trim().toLowerCase().replace(/[^a-zA-Z0-9]/g, '_');
+    return `usr_${clean.slice(0, 24)}`;
+  };
+
+  /**
+   * Finds all existing user documents in Firestore that match the given email, displayName, or uid,
+   * merges any duplicates into 1 canonical profile with the 1 original email account,
+   * and deletes any duplicate/ghost profiles from Firestore `users` and `active_presences`.
+   */
+  const resolveAndSyncSingleProfile = async (params: {
+    candidateUid?: string;
+    email?: string;
+    displayName?: string;
+    photoURL?: string;
+    location?: string;
+    bio?: string;
+  }): Promise<UserProfile> => {
+    const cleanEmail = normalizeEmailKey(params.email);
+    const cleanName = cleanDisplayName(params.displayName);
+    const nameKey = normalizeNameKey(cleanName);
+    const emailLocal = cleanEmail ? cleanEmail.split('@')[0] : '';
+
+    const matchedProfiles: UserProfile[] = [];
+    const ghostUidsToDelete: string[] = [];
+
+    try {
+      const usersSnap = await getDocs(collection(db, 'users'));
+      usersSnap.forEach((docSnap) => {
+        const u = docSnap.data() as UserProfile;
+        const docUid = u.uid || docSnap.id;
+        const normalizedDoc: UserProfile = { ...u, uid: docUid };
+
+        if (isGhostProfile(normalizedDoc)) {
+          if (!docUid.startsWith('demo_user_')) {
+            ghostUidsToDelete.push(docUid);
+          }
+          return;
+        }
+
+        const uEmail = normalizeEmailKey(normalizedDoc.email);
+        const uName = normalizeNameKey(normalizedDoc.displayName);
+        const uEmailLocal = uEmail ? uEmail.split('@')[0] : '';
+
+        const isMatch =
+          (params.candidateUid && docUid === params.candidateUid) ||
+          (cleanEmail && uEmail && cleanEmail === uEmail) ||
+          (nameKey && uName && nameKey === uName) ||
+          (emailLocal && uName && emailLocal === uName) ||
+          (nameKey && uEmailLocal && nameKey === uEmailLocal) ||
+          (emailLocal &&
+            uEmailLocal &&
+            emailLocal === uEmailLocal &&
+            (isSyntheticEmail(cleanEmail) || isSyntheticEmail(uEmail, docUid)));
+
+        if (isMatch) {
+          matchedProfiles.push(normalizedDoc);
+        }
+      });
+    } catch (e) {
+      // Fallback if offline
+    }
+
+    let finalProfile: UserProfile;
+    let duplicateUids: string[] = [];
+
+    if (matchedProfiles.length > 0) {
+      // If incoming params have a real original email (non-synthetic), include it in the merge candidate
+      const incomingCandidate: UserProfile = {
+        uid: params.candidateUid || matchedProfiles[0].uid,
+        displayName: cleanName || matchedProfiles[0].displayName,
+        email:
+          !isSyntheticEmail(cleanEmail)
+            ? cleanEmail
+            : matchedProfiles.find((m) => !isSyntheticEmail(m.email, m.uid))?.email ||
+              cleanEmail ||
+              matchedProfiles[0].email,
+        photoURL: params.photoURL || matchedProfiles[0].photoURL,
+        location: params.location || matchedProfiles[0].location,
+        bio: params.bio || matchedProfiles[0].bio,
+        status: 'online',
+        lastSeen: 'Active now'
+      };
+
+      const merged = mergeDuplicateProfiles(
+        [...matchedProfiles, incomingCandidate],
+        params.candidateUid && !params.candidateUid.startsWith('usr_') && !params.candidateUid.startsWith('google_')
+          ? params.candidateUid
+          : undefined
+      );
+
+      finalProfile = {
+        ...merged.canonical,
+        status: merged.canonical.status === 'busy' ? 'busy' : 'online',
+        lastSeen: merged.canonical.status === 'busy' ? 'Busy (Do Not Disturb)' : 'Active now'
+      };
+      duplicateUids = merged.duplicateUids;
+    } else {
+      const uid =
+        params.candidateUid ||
+        getConsistentUid(cleanEmail || `${nameKey || 'user'}@ipin.chat`);
+      const resolvedEmail = cleanEmail || `${nameKey || 'user'}@ipin.chat`;
+      const resolvedName = cleanName || resolvedEmail.split('@')[0] || 'Member';
+
+      finalProfile = {
+        uid,
+        displayName: resolvedName,
+        email: resolvedEmail,
+        photoURL: params.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${uid}`,
+        bannerURL: 'https://images.unsplash.com/photo-1508804185872-d7badad00f7d?w=800&auto=format&fit=crop&q=80',
+        bannerType: 'image',
+        status: 'online',
+        location: params.location || 'Global Bridge 🌏',
+        bio: params.bio || 'Active on ipin Messenger connecting worldwide!',
+        createdAt: new Date().toISOString(),
+        lastSeen: 'Active now'
+      };
+    }
+
+    // Save the 1 canonical profile to Firestore
+    try {
+      await setDoc(doc(db, 'users', finalProfile.uid), finalProfile, { merge: true });
+    } catch (e) {}
+
+    // Delete all duplicate & ghost profiles from Firestore `users` and `active_presences`
+    const allToDelete = Array.from(new Set([...duplicateUids, ...ghostUidsToDelete])).filter(
+      (id) => id && id !== finalProfile.uid && !id.startsWith('demo_user_')
+    );
+    if (allToDelete.length > 0) {
+      await Promise.allSettled(
+        allToDelete.flatMap((dupUid) => [
+          deleteDoc(doc(db, 'users', dupUid)),
+          deleteDoc(doc(db, 'active_presences', dupUid))
+        ])
+      );
+    }
+
+    return finalProfile;
+  };
+
   // Initialize Auth listener and restore active session
   useEffect(() => {
-    // Purge any legacy stored email credentials from local storage
     try {
       localStorage.removeItem('ipin_last_login_email');
     } catch (e) {}
 
     let active = true;
 
-    const restoreStoredProfile = (): boolean => {
+    const restoreStoredProfile = (): UserProfile | null => {
       try {
         const storedUser = localStorage.getItem('ipin_active_user');
         const storedDemo = localStorage.getItem('ipin_active_demo_user');
 
         if (storedUser && active) {
           const parsed = JSON.parse(storedUser) as UserProfile;
-          if (parsed && parsed.uid && parsed.displayName !== 'ipin User') {
-            setProfile({ ...parsed, status: 'online', lastSeen: 'Active now' });
-            setIsDemoMode(parsed.uid.startsWith('demo_user_'));
-            return true;
+          if (parsed && parsed.uid && !isGhostProfile(parsed)) {
+            const preservedStatus = normalizeUserStatus(parsed.status);
+            const cleaned: UserProfile = {
+              ...parsed,
+              displayName: cleanDisplayName(parsed.displayName) || parsed.displayName,
+              status: preservedStatus,
+              lastSeen:
+                preservedStatus === 'busy'
+                  ? 'Busy (Do Not Disturb)'
+                  : preservedStatus === 'offline'
+                  ? 'Offline'
+                  : 'Active now'
+            };
+            setProfile(cleaned);
+            setIsDemoMode(cleaned.uid.startsWith('demo_user_'));
+            return cleaned;
+          } else if (parsed && isGhostProfile(parsed)) {
+            localStorage.removeItem('ipin_active_user');
           }
         }
         if (storedDemo && active) {
           const parsed = JSON.parse(storedDemo) as UserProfile;
           if (parsed && parsed.uid) {
-            setProfile({ ...parsed, status: 'online', lastSeen: 'Active now' });
+            const preservedStatus = normalizeUserStatus(parsed.status);
+            const cleaned: UserProfile = {
+              ...parsed,
+              status: preservedStatus,
+              lastSeen:
+                preservedStatus === 'busy'
+                  ? 'Busy (Do Not Disturb)'
+                  : preservedStatus === 'offline'
+                  ? 'Offline'
+                  : 'Active now'
+            };
+            setProfile(cleaned);
             setIsDemoMode(true);
-            return true;
+            return cleaned;
           }
         }
       } catch (e) {}
-      return false;
+      return null;
     };
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (!active) return;
 
-      // Critical fix: If Firebase Auth user is anonymous (used in background for Firestore security rules),
-      // DO NOT overwrite the user's real profile from localStorage with a blank anonymous UID!
       if (firebaseUser && firebaseUser.isAnonymous) {
         setUser(firebaseUser);
         const restored = restoreStoredProfile();
         if (!restored && active) {
           setProfile(null);
           setIsDemoMode(false);
+        } else if (restored && active) {
+          // Run background deduplication so if the restored profile has a duplicate or original email in Firestore, it syncs to 1 profile
+          purgeGhostAndDuplicateProfilesInFirestore(restored, true).then((canonical) => {
+            if (active && canonical && !isGhostProfile(canonical)) {
+              setProfile(canonical);
+              localStorage.setItem('ipin_active_user', JSON.stringify(canonical));
+            }
+          });
         }
         if (active) setIsAuthReady(true);
         return;
@@ -108,50 +301,21 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         setUser(firebaseUser);
         setIsDemoMode(false);
 
-        // Load or create user document in Firestore
-        const userDocRef = doc(db, 'users', firebaseUser.uid);
         try {
-          const snapshot = await getDoc(userDocRef);
-          if (snapshot.exists() && active) {
-            const loaded = {
-              ...(snapshot.data() as UserProfile),
-              status: 'online' as const,
-              lastSeen: 'Active now'
-            };
-            setProfile(loaded);
-            localStorage.setItem('ipin_active_user', JSON.stringify(loaded));
-          } else if (active) {
-            const initialProfile: UserProfile = {
-              uid: firebaseUser.uid,
-              displayName: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'ipin User',
-              email: firebaseUser.email || '',
-              photoURL: firebaseUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${firebaseUser.uid}`,
-              bannerURL: 'https://images.unsplash.com/photo-1508804185872-d7badad00f7d?w=800&auto=format&fit=crop&q=80',
-              bannerType: 'image',
-              status: 'online',
-              location: 'Global Bridge 🌏',
-              bio: 'Active on ipin Messenger connecting worldwide!',
-              createdAt: new Date().toISOString(),
-              lastSeen: 'Active now'
-            };
-            await setDoc(userDocRef, initialProfile, { merge: true });
-            setProfile(initialProfile);
-            localStorage.setItem('ipin_active_user', JSON.stringify(initialProfile));
-          }
-        } catch (error) {
-          console.warn("Could not fetch user profile from Firestore:", error);
+          const syncedProfile = await resolveAndSyncSingleProfile({
+            candidateUid: firebaseUser.uid,
+            email: firebaseUser.email || undefined,
+            displayName: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || undefined,
+            photoURL: firebaseUser.photoURL || undefined
+          });
           if (active) {
-            const fallbackProfile: UserProfile = {
-              uid: firebaseUser.uid,
-              displayName: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'ipin User',
-              email: firebaseUser.email || '',
-              photoURL: firebaseUser.photoURL || undefined,
-              status: 'online',
-              lastSeen: 'Active now'
-            };
-            setProfile(fallbackProfile);
-            localStorage.setItem('ipin_active_user', JSON.stringify(fallbackProfile));
+            setProfile(syncedProfile);
+            localStorage.setItem('ipin_active_user', JSON.stringify(syncedProfile));
           }
+          // Also run full database deduplication sweep
+          purgeGhostAndDuplicateProfilesInFirestore(syncedProfile, true).catch(() => {});
+        } catch (error) {
+          console.warn('Could not sync user profile from Firestore:', error);
         }
       } else {
         setUser(null);
@@ -160,6 +324,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           if (!auth.currentUser) {
             signInAnonymously(auth).catch(() => {});
           }
+          purgeGhostAndDuplicateProfilesInFirestore(restored, true).then((canonical) => {
+            if (active && canonical && !isGhostProfile(canonical)) {
+              setProfile(canonical);
+              localStorage.setItem('ipin_active_user', JSON.stringify(canonical));
+            }
+          });
         } else if (active) {
           setProfile(null);
           setIsDemoMode(false);
@@ -177,24 +347,89 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     };
   }, []);
 
-  // Presence Heartbeat Updater — syncs both active_presences/{uid} and users/{uid}
+  // Real-time listener on current user's own document in Firestore so status/profile changes sync across tabs
   useEffect(() => {
-    if (!profile) return;
-    const currentUid = profile.uid;
+    if (!profile?.uid) return;
+    const userDocRef = doc(db, 'users', profile.uid);
+    const unsub = onSnapshot(
+      userDocRef,
+      (snap) => {
+        if (!snap.exists()) return;
+        const remote = snap.data() as UserProfile;
+        if (!remote || !remote.uid || isGhostProfile(remote)) return;
+        setProfile((prev) => {
+          if (!prev || prev.uid !== remote.uid) return prev;
+          const nextStatus = normalizeUserStatus(remote.status || prev.status);
+          const cleanedName = cleanDisplayName(remote.displayName) || prev.displayName;
+          const bestEmail =
+            !isSyntheticEmail(remote.email, remote.uid)
+              ? remote.email
+              : !isSyntheticEmail(prev.email, prev.uid)
+              ? prev.email
+              : remote.email || prev.email;
 
-    const updatePresence = async () => {
+          if (
+            prev.status === nextStatus &&
+            prev.displayName === cleanedName &&
+            prev.email === bestEmail &&
+            prev.photoURL === remote.photoURL &&
+            prev.bannerURL === remote.bannerURL &&
+            prev.note === remote.note &&
+            prev.bio === remote.bio &&
+            prev.location === remote.location
+          ) {
+            return prev;
+          }
+          const merged: UserProfile = {
+            ...prev,
+            ...remote,
+            displayName: cleanedName,
+            email: bestEmail,
+            status: nextStatus
+          };
+          try {
+            localStorage.setItem('ipin_active_user', JSON.stringify(merged));
+          } catch (e) {}
+          return merged;
+        });
+      },
+      () => {}
+    );
+    return () => unsub();
+  }, [profile?.uid]);
+
+  // Real-Time Presence Heartbeat & Physical Disconnect Handler
+  useEffect(() => {
+    if (!profile || isGhostProfile(profile)) return;
+    const currentUid = profile.uid;
+    const currentStatus = normalizeUserStatus(profile.status);
+    const cleanName = cleanDisplayName(profile.displayName) || profile.displayName;
+
+    const writePresenceState = async (physicallyConnected: boolean) => {
       const nowIso = new Date().toISOString();
+      const nowMs = Date.now();
+      const isEffectivelyOnline = physicallyConnected && navigator.onLine !== false && currentStatus !== 'offline';
+      const statusToWrite: UserStatus = !physicallyConnected || navigator.onLine === false ? 'offline' : currentStatus;
+      const lastSeenText =
+        statusToWrite === 'busy'
+          ? 'Busy (Do Not Disturb)'
+          : statusToWrite === 'online'
+          ? 'Active now'
+          : `Last seen ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+
       try {
         const presenceRef = doc(db, 'active_presences', currentUid);
         await setDoc(
           presenceRef,
           {
             uid: currentUid,
-            displayName: profile.displayName,
+            displayName: cleanName,
             email: profile.email || '',
             photoURL: profile.photoURL || '',
             lastActive: nowIso,
-            isOnline: true
+            lastActiveMs: nowMs,
+            isOnline: isEffectivelyOnline,
+            status: statusToWrite
           },
           { merge: true }
         );
@@ -208,11 +443,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           userRef,
           {
             uid: currentUid,
-            displayName: profile.displayName,
+            displayName: cleanName,
             email: profile.email || '',
             photoURL: profile.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${currentUid}`,
-            status: 'online',
-            lastSeen: 'Active now'
+            status: statusToWrite,
+            lastActive: nowIso,
+            lastSeen: lastSeenText
           },
           { merge: true }
         );
@@ -221,96 +457,169 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
     };
 
-    updatePresence();
-    const interval = setInterval(updatePresence, 15000); // 15s fast heartbeat
+    // Immediate heartbeat on mount or status change
+    writePresenceState(true);
+
+    // Fast 8-second heartbeat so active users stay live and physical disconnects expire quickly
+    const interval = setInterval(() => {
+      writePresenceState(true);
+    }, 8000);
 
     const handleVisibilityOrFocus = () => {
       if (document.visibilityState === 'visible') {
-        updatePresence();
+        writePresenceState(true);
       }
     };
 
+    const handleOnline = () => writePresenceState(true);
+    const handleOffline = () => writePresenceState(false);
+    const handlePageUnload = () => {
+      writePresenceState(false);
+    };
+
     window.addEventListener('visibilitychange', handleVisibilityOrFocus);
-    window.addEventListener('focus', updatePresence);
-    window.addEventListener('online', updatePresence);
+    window.addEventListener('focus', handleOnline);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('beforeunload', handlePageUnload);
+    window.addEventListener('pagehide', handlePageUnload);
 
     return () => {
       clearInterval(interval);
       window.removeEventListener('visibilitychange', handleVisibilityOrFocus);
-      window.removeEventListener('focus', updatePresence);
-      window.removeEventListener('online', updatePresence);
+      window.removeEventListener('focus', handleOnline);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('beforeunload', handlePageUnload);
+      window.removeEventListener('pagehide', handlePageUnload);
     };
-  }, [profile?.uid, profile?.displayName, profile?.email, profile?.photoURL]);
+  }, [profile?.uid, profile?.displayName, profile?.email, profile?.photoURL, profile?.status]);
 
-  // Real-time Active Presences Listener (clock-skew tolerant across devices & timezones)
+  // Real-time Active Presences Listener + 5-second Physical Offline Expiration Checker
   useEffect(() => {
-    const presencesRef = collection(db, 'active_presences');
-    const unsubscribe = onSnapshot(presencesRef, (snapshot) => {
-      const list: ActivePresence[] = [];
+    const computeActiveList = () => {
       const now = Date.now();
-      snapshot.forEach((docSnap) => {
-        const data = docSnap.data() as ActivePresence;
-        if (data.isOnline === false) return;
-        const activeTime = data.lastActive ? new Date(data.lastActive).getTime() : now;
-        // Allow up to 30 minutes drift/idle so clock skew between phones/PCs never hides online users
-        if (isNaN(activeTime) || Math.abs(now - activeTime) < 30 * 60 * 1000) {
+      const list: ActivePresence[] = [];
+
+      heartbeatTrackerRef.current.forEach((entry, uid) => {
+        const data = entry.rawDoc;
+        if (data.isOnline === false || data.status === 'offline') return;
+
+        // A user is physically connected if we received a fresh heartbeat update within the last 30 seconds
+        const ageSinceReceived = now - entry.receivedAtMs;
+        if (ageSinceReceived <= 30000) {
           list.push({
             ...data,
-            uid: data.uid || docSnap.id,
-            isOnline: true
+            uid: data.uid || uid,
+            displayName: cleanDisplayName(data.displayName) || data.displayName,
+            isOnline: true,
+            status: normalizeUserStatus(data.status)
           });
         }
       });
 
-      // Ensure demo users are also included in presence if not already there
-      const onlineDemoPresences: ActivePresence[] = DEMO_USERS
-        .filter(u => u.status === 'online' && !list.some(p => p.uid === u.uid))
-        .map(u => ({
+      // Include built-in demo users that are set to online or busy if not already in list
+      const demoPresences: ActivePresence[] = DEMO_USERS
+        .filter((u) => u.status !== 'offline' && !list.some((p) => p.uid === u.uid))
+        .map((u) => ({
           uid: u.uid,
           displayName: u.displayName,
           email: u.email,
           photoURL: u.photoURL,
           lastActive: new Date().toISOString(),
-          isOnline: true
+          isOnline: true,
+          status: normalizeUserStatus(u.status)
         }));
 
-      // If current profile is not in list, add it
-      if (profile && !list.some(p => p.uid === profile.uid)) {
+      // Include current user if their status is not offline
+      const myStatus = normalizeUserStatus(profile?.status);
+      if (profile && !isGhostProfile(profile) && myStatus !== 'offline' && navigator.onLine !== false && !list.some((p) => p.uid === profile.uid)) {
         list.push({
           uid: profile.uid,
-          displayName: profile.displayName,
+          displayName: cleanDisplayName(profile.displayName) || profile.displayName,
           email: profile.email || '',
           photoURL: profile.photoURL,
           lastActive: new Date().toISOString(),
-          isOnline: true
+          isOnline: true,
+          status: myStatus
         });
       }
 
-      const combined = [...list, ...onlineDemoPresences];
-      const unique = Array.from(new Map(combined.map(item => [item.uid, item])).values());
-      setActivePresences(unique);
-    }, (error) => {
-      const fallback: ActivePresence[] = DEMO_USERS.map(u => ({
-        uid: u.uid,
-        displayName: u.displayName,
-        email: u.email,
-        photoURL: u.photoURL,
-        lastActive: new Date().toISOString(),
-        isOnline: u.status === 'online'
-      }));
-      setActivePresences(fallback);
-    });
+      const combined = [...list, ...demoPresences];
+      const deduplicated = deduplicateActivePresences(combined);
+      setActivePresences(deduplicated);
+    };
 
-    return () => unsubscribe();
-  }, [profile?.uid, profile?.displayName, profile?.email, profile?.photoURL]);
+    const presencesRef = collection(db, 'active_presences');
+    const unsubscribe = onSnapshot(
+      presencesRef,
+      (snapshot) => {
+        const now = Date.now();
+        const currentIds = new Set<string>();
 
-  // Helper to generate consistent user ID for any email
-  const getConsistentUid = (emailStr: string) => {
-    const clean = emailStr.trim().toLowerCase().replace(/[^a-zA-Z0-9]/g, '_');
-    return `usr_${clean.slice(0, 24)}`;
-  };
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data() as ActivePresence;
+          const uid = data.uid || docSnap.id;
 
-  // Google Login Implementation with robust fallback
+          // Ignore ghost presences
+          const nameKey = normalizeNameKey(data.displayName);
+          if (!nameKey || nameKey === 'ipin user' || nameKey === 'user' || nameKey === 'guest') {
+            return;
+          }
+
+          currentIds.add(uid);
+
+          const prev = heartbeatTrackerRef.current.get(uid);
+          const remoteTimeMs = data.lastActiveMs || (data.lastActive ? new Date(data.lastActive).getTime() : 0);
+
+          if (data.isOnline === false || data.status === 'offline') {
+            heartbeatTrackerRef.current.delete(uid);
+            return;
+          }
+
+          if (!prev) {
+            const isRecent = !isNaN(remoteTimeMs) && Math.abs(now - remoteTimeMs) <= 45000;
+            heartbeatTrackerRef.current.set(uid, {
+              lastActiveStr: data.lastActive || '',
+              receivedAtMs: isRecent ? now : remoteTimeMs || 0,
+              rawDoc: data
+            });
+          } else if (prev.lastActiveStr !== data.lastActive || prev.rawDoc.status !== data.status) {
+            heartbeatTrackerRef.current.set(uid, {
+              lastActiveStr: data.lastActive || '',
+              receivedAtMs: now,
+              rawDoc: data
+            });
+          } else {
+            heartbeatTrackerRef.current.set(uid, {
+              ...prev,
+              rawDoc: data
+            });
+          }
+        });
+
+        Array.from(heartbeatTrackerRef.current.keys()).forEach((uid) => {
+          if (!currentIds.has(uid)) {
+            heartbeatTrackerRef.current.delete(uid);
+          }
+        });
+
+        computeActiveList();
+      },
+      () => {
+        computeActiveList();
+      }
+    );
+
+    const expiryTimer = setInterval(computeActiveList, 5000);
+
+    return () => {
+      unsubscribe();
+      clearInterval(expiryTimer);
+    };
+  }, [profile?.uid, profile?.displayName, profile?.email, profile?.photoURL, profile?.status]);
+
+  // Google Login Implementation with single-profile deduplication
   const signInWithGoogle = async (fallbackEmail?: string) => {
     setLoginError(null);
     try {
@@ -319,56 +628,21 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const cred = await signInWithPopup(auth, provider);
       const googleUser = cred.user;
 
-      const userDocRef = doc(db, 'users', googleUser.uid);
-      let userProfile: UserProfile;
-
-      try {
-        const snapshot = await getDoc(userDocRef);
-        if (snapshot.exists()) {
-          userProfile = {
-            ...(snapshot.data() as UserProfile),
-            displayName: googleUser.displayName || (snapshot.data() as UserProfile).displayName,
-            photoURL: googleUser.photoURL || (snapshot.data() as UserProfile).photoURL,
-            email: googleUser.email || (snapshot.data() as UserProfile).email,
-            status: 'online',
-            lastSeen: 'Active now'
-          };
-          await setDoc(userDocRef, userProfile, { merge: true });
-        } else {
-          userProfile = {
-            uid: googleUser.uid,
-            displayName: googleUser.displayName || googleUser.email?.split('@')[0] || 'Google User',
-            email: googleUser.email || '',
-            photoURL: googleUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${googleUser.uid}`,
-            bannerURL: 'https://images.unsplash.com/photo-1508804185872-d7badad00f7d?w=800&auto=format&fit=crop&q=80',
-            bannerType: 'image',
-            status: 'online',
-            location: 'Global Bridge 🌏',
-            bio: 'Connected via Google Account on ipin Messenger!',
-            createdAt: new Date().toISOString(),
-            lastSeen: 'Active now'
-          };
-          await setDoc(userDocRef, userProfile);
-        }
-      } catch (err) {
-        userProfile = {
-          uid: googleUser.uid,
-          displayName: googleUser.displayName || 'Google User',
-          email: googleUser.email || '',
-          photoURL: googleUser.photoURL || undefined,
-          status: 'online'
-        };
-      }
+      const userProfile = await resolveAndSyncSingleProfile({
+        candidateUid: googleUser.uid,
+        email: googleUser.email || undefined,
+        displayName: googleUser.displayName || googleUser.email?.split('@')[0] || undefined,
+        photoURL: googleUser.photoURL || undefined
+      });
 
       setUser(googleUser);
       setProfile(userProfile);
       setIsDemoMode(false);
       localStorage.setItem('ipin_active_user', JSON.stringify(userProfile));
-      localStorage.setItem('ipin_last_login_email', googleUser.email || '');
+      localStorage.setItem('ipin_last_login_email', userProfile.email || '');
       localStorage.removeItem('ipin_active_demo_user');
     } catch (err: any) {
       console.warn('Google Sign-In notice:', err?.message || err);
-      // If user supplied a specific fallback email, proceed with it; otherwise display informative message
       if (fallbackEmail) {
         await signInWithGoogleQuick(fallbackEmail, fallbackEmail.split('@')[0]);
       } else {
@@ -377,12 +651,15 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
-  // Fast direct Google login (guaranteed to work across all iframe & popup-restricted environments)
-  const signInWithGoogleQuick = async (emailStr = 'guest@ipin.chat', nameStr?: string) => {
+  // Fast direct Google login (maps to the exact same 1 canonical profile per email, no "(Google)" duplicate!)
+  const signInWithGoogleQuick = async (emailStr = '', nameStr?: string) => {
     setLoginError(null);
-    const cleanEmail = emailStr.trim().toLowerCase();
-    const cleanName = nameStr || cleanEmail.split('@')[0] || 'Google User';
-    const googleUid = `google_${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_')}`;
+    const cleanEmail = normalizeEmailKey(emailStr);
+    if (!cleanEmail) {
+      setLoginError('Please enter your email address.');
+      return;
+    }
+    const cleanName = cleanDisplayName(nameStr) || cleanEmail.split('@')[0];
 
     if (!auth.currentUser) {
       try {
@@ -390,54 +667,19 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       } catch (e) {}
     }
 
-    const userDocRef = doc(db, 'users', googleUid);
-    let userProfile: UserProfile;
-
-    try {
-      const snapshot = await getDoc(userDocRef);
-      if (snapshot.exists()) {
-        userProfile = {
-          ...(snapshot.data() as UserProfile),
-          displayName: cleanName,
-          email: cleanEmail,
-          status: 'online',
-          lastSeen: 'Active now'
-        };
-        await setDoc(userDocRef, userProfile, { merge: true });
-      } else {
-        userProfile = {
-          uid: googleUid,
-          displayName: `${cleanName} (Google)`,
-          email: cleanEmail,
-          photoURL: `https://api.dicebear.com/7.x/bottts/svg?seed=${googleUid}`,
-          bannerURL: 'https://images.unsplash.com/photo-1508804185872-d7badad00f7d?w=800&auto=format&fit=crop&q=80',
-          bannerType: 'image',
-          status: 'online',
-          location: 'Global Bridge 🌏',
-          bio: 'Verified Google Account connected to ipin Messenger.',
-          createdAt: new Date().toISOString(),
-          lastSeen: 'Active now'
-        };
-        await setDoc(userDocRef, userProfile);
-      }
-    } catch (e) {
-      userProfile = {
-        uid: googleUid,
-        displayName: `${cleanName} (Google)`,
-        email: cleanEmail,
-        photoURL: `https://api.dicebear.com/7.x/bottts/svg?seed=${googleUid}`,
-        status: 'online'
-      };
-    }
+    const userProfile = await resolveAndSyncSingleProfile({
+      email: cleanEmail,
+      displayName: cleanName
+    });
 
     setProfile(userProfile);
     setIsDemoMode(false);
     localStorage.setItem('ipin_active_user', JSON.stringify(userProfile));
-    localStorage.setItem('ipin_last_login_email', cleanEmail);
+    localStorage.setItem('ipin_last_login_email', userProfile.email);
     localStorage.removeItem('ipin_active_demo_user');
   };
 
-  // Universal Sign In: All credentials work reliably (email, username, demo, custom)
+  // Universal Sign In: Resolves to the 1 canonical profile synced with the 1 original email account
   const signIn = async (emailOrUser: string, pass?: string) => {
     setLoginError(null);
     const rawInput = (emailOrUser || '').trim();
@@ -448,12 +690,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     const lowerInput = rawInput.toLowerCase();
 
-    // 1. Check if user typed the name or email of an existing demo persona
+    // 1. Check if user typed the name or email of a built-in demo persona
     const matchedPersona = DEMO_USERS.find(
       (u) =>
         u.email.toLowerCase() === lowerInput ||
         u.displayName.toLowerCase().includes(lowerInput) ||
-        u.uid.toLowerCase().includes(lowerInput)
+        u.uid.toLowerCase() === lowerInput
     );
 
     if (matchedPersona) {
@@ -470,140 +712,52 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       return;
     }
 
-    // 2. Normalize identifier to email format
-    const cleanEmail = lowerInput.includes('@') ? lowerInput : `${lowerInput}@ipin.chat`;
-
-    // 3. Try Firebase Auth standard sign in if password provided
-    if (pass) {
-      try {
-        const cred = await signInWithEmailAndPassword(auth, cleanEmail, pass);
-        const snapshot = await getDoc(doc(db, 'users', cred.user.uid));
-        let userProfile: UserProfile;
-
-        if (snapshot.exists()) {
-          userProfile = snapshot.data() as UserProfile;
-        } else {
-          userProfile = {
-            uid: cred.user.uid,
-            displayName: cred.user.displayName || cleanEmail.split('@')[0],
-            email: cleanEmail,
-            photoURL: cred.user.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${cred.user.uid}`,
-            status: 'online',
-            createdAt: new Date().toISOString(),
-            lastSeen: 'Active now'
-          };
-          await setDoc(doc(db, 'users', cred.user.uid), userProfile);
-        }
-
-        setUser(cred.user);
-        setProfile(userProfile);
-        setIsDemoMode(false);
-        localStorage.setItem('ipin_active_user', JSON.stringify(userProfile));
-        localStorage.setItem('ipin_last_login_email', cleanEmail);
-        localStorage.removeItem('ipin_active_demo_user');
-        return;
-      } catch (fbErr: any) {
-        console.warn('Firebase Auth email provider returned, using universal credential resolver:', fbErr?.code);
-        // Do NOT block the user! Fall through so all credentials work!
-      }
-    }
-
-    // 4. Universal Credential Resolver: Check if an account with this email or displayName already exists in Firestore
-    let uid = getConsistentUid(cleanEmail);
-    let existingMatchedProfile: UserProfile | null = null;
-
     if (!auth.currentUser) {
       try {
         await signInAnonymously(auth);
       } catch (e) {}
     }
 
-    try {
-      const usersSnap = await getDocs(collection(db, 'users'));
-      usersSnap.forEach((docSnap) => {
-        const u = docSnap.data() as UserProfile;
-        if (!u || !u.uid || u.displayName === 'ipin User') return;
-        const uEmail = (u.email || '').trim().toLowerCase();
-        const uName = (u.displayName || '').trim().toLowerCase();
-        if (
-          uEmail === lowerInput ||
-          uEmail === cleanEmail ||
-          uName === lowerInput ||
-          u.uid.toLowerCase() === lowerInput
-        ) {
-          existingMatchedProfile = u;
-        }
-      });
-    } catch (e) {}
+    // 2. First check if an account with this email or displayName ALREADY exists in Firestore
+    // so if they typed a username (without @), we find their original @gmail.com email instead of inventing @ipin.chat!
+    const isEmailInput = lowerInput.includes('@');
+    let candidateFirebaseUid: string | undefined;
 
-    if (existingMatchedProfile) {
-      uid = (existingMatchedProfile as UserProfile).uid;
-    }
-
-    const userDocRef = doc(db, 'users', uid);
-    let userProfile: UserProfile;
-
-    try {
-      const snapshot = await getDoc(userDocRef);
-      if (snapshot.exists()) {
-        userProfile = {
-          ...(snapshot.data() as UserProfile),
-          status: 'online',
-          lastSeen: 'Active now'
-        };
-        await setDoc(userDocRef, userProfile, { merge: true });
-      } else if (existingMatchedProfile) {
-        userProfile = {
-          ...(existingMatchedProfile as UserProfile),
-          status: 'online',
-          lastSeen: 'Active now'
-        };
-        await setDoc(userDocRef, userProfile, { merge: true });
-      } else {
-        const fallbackName = rawInput.includes('@') ? cleanEmail.split('@')[0] : rawInput;
-        userProfile = {
-          uid,
-          displayName: fallbackName,
-          email: cleanEmail,
-          photoURL: `https://api.dicebear.com/7.x/bottts/svg?seed=${uid}`,
-          bannerURL: 'https://images.unsplash.com/photo-1508804185872-d7badad00f7d?w=800&auto=format&fit=crop&q=80',
-          bannerType: 'image',
-          status: 'online',
-          location: 'Global Bridge 🌏',
-          bio: 'Active on ipin Messenger connecting worldwide!',
-          createdAt: new Date().toISOString(),
-          lastSeen: 'Active now'
-        };
-        await setDoc(userDocRef, userProfile, { merge: true });
+    if (pass && isEmailInput) {
+      try {
+        const cred = await signInWithEmailAndPassword(auth, lowerInput, pass);
+        candidateFirebaseUid = cred.user.uid;
+        setUser(cred.user);
+      } catch (fbErr: any) {
+        // Proceed with universal resolver
       }
-    } catch (err) {
-      userProfile = existingMatchedProfile || {
-        uid,
-        displayName: rawInput.includes('@') ? cleanEmail.split('@')[0] : rawInput,
-        email: cleanEmail,
-        photoURL: `https://api.dicebear.com/7.x/bottts/svg?seed=${uid}`,
-        status: 'online',
-        lastSeen: 'Active now'
-      };
     }
+
+    const userProfile = await resolveAndSyncSingleProfile({
+      candidateUid: candidateFirebaseUid,
+      email: isEmailInput ? lowerInput : undefined,
+      displayName: !isEmailInput ? rawInput : undefined
+    });
 
     localStorage.setItem('ipin_active_user', JSON.stringify(userProfile));
-    localStorage.setItem('ipin_last_login_email', cleanEmail);
+    localStorage.setItem('ipin_last_login_email', userProfile.email);
     localStorage.removeItem('ipin_active_demo_user');
     setProfile(userProfile);
     setIsDemoMode(false);
   };
 
-  // Sign up and create new account
+  // Sign up or sync with existing original email account (never creates a 2nd duplicate profile)
   const signUp = async (email: string, pass: string, name: string, location?: string, avatar?: string) => {
     setLoginError(null);
-    const cleanEmail = email.trim().toLowerCase();
-    const cleanName = name.trim() || cleanEmail.split('@')[0] || 'ipin User';
+    const cleanEmail = normalizeEmailKey(email);
+    const cleanName = cleanDisplayName(name) || cleanEmail.split('@')[0] || 'Member';
 
     try {
-      // 1. Try Firebase Auth createUser
+      let candidateUid: string | undefined;
+
       try {
         const cred = await createUserWithEmailAndPassword(auth, cleanEmail, pass);
+        candidateUid = cred.user.uid;
         const userPhoto = avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${cred.user.uid}`;
         try {
           await updateFirebaseProfile(cred.user, {
@@ -611,54 +765,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             photoURL: userPhoto
           });
         } catch (e) {}
-
-        const newProfile: UserProfile = {
-          uid: cred.user.uid,
-          displayName: cleanName,
-          email: cleanEmail,
-          photoURL: userPhoto,
-          bannerURL: 'https://images.unsplash.com/photo-1508804185872-d7badad00f7d?w=800&auto=format&fit=crop&q=80',
-          bannerType: 'image',
-          status: 'online',
-          location: location?.trim() || 'China-Global Bridge 🌏',
-          bio: 'Connecting China and the rest of the world on ipin Messenger.',
-          createdAt: new Date().toISOString(),
-          lastSeen: 'Active now'
-        };
-
-        localStorage.setItem('ipin_active_user', JSON.stringify(newProfile));
-        localStorage.removeItem('ipin_active_demo_user');
-        await setDoc(doc(db, 'users', cred.user.uid), newProfile, { merge: true });
         setUser(cred.user);
-        setProfile(newProfile);
-        setIsDemoMode(false);
-        return;
       } catch (fbErr: any) {
         if (fbErr.code === 'auth/email-already-in-use') {
-          return await signIn(cleanEmail, pass);
+          try {
+            const signInCred = await signInWithEmailAndPassword(auth, cleanEmail, pass);
+            candidateUid = signInCred.user.uid;
+            setUser(signInCred.user);
+          } catch (e) {}
         }
-        console.warn('Firebase Auth createUser returned, using universal registration:', fbErr.code);
       }
-
-      // 2. Universal Registration Fallback:
-      const uid = getConsistentUid(cleanEmail);
-      const userPhoto = avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${uid}`;
-      const newProfile: UserProfile = {
-        uid,
-        displayName: cleanName,
-        email: cleanEmail,
-        photoURL: userPhoto,
-        bannerURL: 'https://images.unsplash.com/photo-1508804185872-d7badad00f7d?w=800&auto=format&fit=crop&q=80',
-        bannerType: 'image',
-        status: 'online',
-        location: location?.trim() || 'China-Global Bridge 🌏',
-        bio: 'Connecting China and the rest of the world on ipin Messenger.',
-        createdAt: new Date().toISOString(),
-        lastSeen: 'Active now'
-      };
-
-      localStorage.setItem('ipin_active_user', JSON.stringify(newProfile));
-      localStorage.removeItem('ipin_active_demo_user');
 
       if (!auth.currentUser) {
         try {
@@ -666,13 +782,20 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         } catch (e) {}
       }
 
-      try {
-        await setDoc(doc(db, 'users', uid), newProfile, { merge: true });
-      } catch (e) {
-        console.warn('Could not write new profile to Firestore:', e);
-      }
+      // Resolve and merge any duplicate profile for this email/name into 1 single canonical profile
+      const syncedProfile = await resolveAndSyncSingleProfile({
+        candidateUid,
+        email: cleanEmail,
+        displayName: cleanName,
+        photoURL: avatar,
+        location: location?.trim() || 'China-Global Bridge 🌏',
+        bio: 'Connecting China and the rest of the world on ipin Messenger.'
+      });
 
-      setProfile(newProfile);
+      localStorage.setItem('ipin_active_user', JSON.stringify(syncedProfile));
+      localStorage.setItem('ipin_last_login_email', syncedProfile.email);
+      localStorage.removeItem('ipin_active_demo_user');
+      setProfile(syncedProfile);
       setIsDemoMode(false);
     } catch (err: any) {
       setLoginError(err.message || 'Failed to create account');
@@ -719,15 +842,52 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const updateProfileData = async (data: Partial<UserProfile>) => {
     if (!profile) return;
-    const updated = { ...profile, ...data };
+    const nextStatus = data.status ? normalizeUserStatus(data.status) : normalizeUserStatus(profile.status);
+    const updated: UserProfile = {
+      ...profile,
+      ...data,
+      displayName: cleanDisplayName(data.displayName ?? profile.displayName) || profile.displayName,
+      status: nextStatus,
+      lastSeen:
+        nextStatus === 'busy'
+          ? 'Busy (Do Not Disturb)'
+          : nextStatus === 'online'
+          ? 'Active now'
+          : 'Offline'
+    };
     setProfile(updated);
     localStorage.setItem('ipin_active_user', JSON.stringify(updated));
+    if (isDemoMode) {
+      localStorage.setItem('ipin_active_demo_user', JSON.stringify(updated));
+    }
+
+    const nowIso = new Date().toISOString();
+    try {
+      await setDoc(doc(db, 'users', profile.uid), { ...updated, lastActive: nowIso }, { merge: true });
+    } catch (err) {
+      console.error('Failed to update profile:', err);
+    }
 
     try {
-      await setDoc(doc(db, 'users', profile.uid), updated, { merge: true });
-    } catch (err) {
-      console.error("Failed to update profile:", err);
-    }
+      await setDoc(
+        doc(db, 'active_presences', profile.uid),
+        {
+          uid: profile.uid,
+          displayName: updated.displayName,
+          email: updated.email || '',
+          photoURL: updated.photoURL || '',
+          lastActive: nowIso,
+          lastActiveMs: Date.now(),
+          isOnline: nextStatus !== 'offline',
+          status: nextStatus
+        },
+        { merge: true }
+      );
+    } catch (err) {}
+  };
+
+  const updateUserStatus = async (newStatus: 'online' | 'busy' | 'offline') => {
+    await updateProfileData({ status: newStatus });
   };
 
   const updateNote = async (note: string, emoji: string) => {
@@ -742,13 +902,17 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     localStorage.setItem('ipin_active_user', JSON.stringify(updated));
 
     try {
-      await setDoc(doc(db, 'users', profile.uid), {
-        note,
-        noteEmoji: emoji,
-        noteUpdatedAt: new Date().toISOString()
-      }, { merge: true });
+      await setDoc(
+        doc(db, 'users', profile.uid),
+        {
+          note,
+          noteEmoji: emoji,
+          noteUpdatedAt: new Date().toISOString()
+        },
+        { merge: true }
+      );
     } catch (err) {
-      console.error("Failed to update note:", err);
+      console.error('Failed to update note:', err);
     }
   };
 
@@ -775,7 +939,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         profile,
         isAuthReady,
         activePresences,
-        activeCount: Math.max(1, activePresences.length),
+        activeCount: Math.max(1, activePresences.filter((p) => p.isOnline && p.status !== 'offline').length),
         loginError,
         signInWithGoogle,
         signInWithGoogleQuick,
@@ -784,6 +948,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         resetPassword,
         signOutUser,
         updateProfileData,
+        updateUserStatus,
         updateNote,
         switchDemoUser,
         isDemoMode,
